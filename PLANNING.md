@@ -52,7 +52,368 @@ SentinelAI provides institutional-quality geopolitical and macroeconomic risk an
 
 ---
 
-## 🔐 Security Architecture
+## � System Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          USER / CLIENT LAYER                                     │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  React Dashboard    │  Risk Analyst UI  │  Portfolio Mgr UI  │  Research UI     │
+│  (Auth0 Protected)  │  (Role-Scoped)    │  (Role-Scoped)     │  (Role-Scoped)   │
+└──────────────────────────────┬──────────────────────────────────────────────────┘
+                               │ HTTPS/TLS 1.3
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         API GATEWAY LAYER                                        │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────────────────────────────────────────────────────────────┐   │
+│  │ FastAPI (Python 3.12)                                                    │   │
+│  │ • Auth Middleware (JWT Validation)                                       │   │
+│  │ • Rate Limiting (Redis-based)                                            │   │
+│  │ • Pydantic v2 Validation                                                 │   │
+│  │ • OpenAPI Documentation                                                  │   │
+│  └──────────────────────────┬───────────────────────────────────────────────┘   │
+└────────────────────────────┬┴───────────────────────────────────────────────────┘
+                             │
+         ┌───────────────────┴───────────────────┐
+         ▼                                       ▼
+┌──────────────────────┐              ┌──────────────────────┐
+│   Celery Worker      │              │   Redis Queue        │
+│   (Async Execution)  │◄─────────────┤   (Job Broker)       │
+└──────────┬───────────┘              └──────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         LANGGRAPH ORCHESTRATION LAYER                            │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│   ┌────────────┐      ┌─────────────────────────────────────────────────┐      │
+│   │  Agent 01  │─────►│          Intelligence Gathering                 │      │
+│   │  Routing   │      │  (Parallel Execution)                           │      │
+│   └────────────┘      │                                                 │      │
+│         │             │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │      │
+│         ▼             │  │ Agent 02 │  │ Agent 03 │  │ Agent 04 │     │      │
+│   Task Graph          │  │Geopolitical│  │Sentiment │  │  Asset  │     │      │
+│   Generated           │  │   Macro  │  │ Analysis │  │ Analyst  │     │      │
+│                       │  └──────────┘  └──────────┘  └──────────┘     │      │
+│                       └─────────────────────┬───────────────────────────┘      │
+│                                             ▼                                    │
+│                                    ┌──────────────┐                             │
+│                                    │   Agent 05   │                             │
+│                                    │ Quant & Risk │                             │
+│                                    │ Aggregation  │                             │
+│                                    └───────┬──────┘                             │
+│                                            ▼                                     │
+│                                    ┌──────────────┐                             │
+│                                    │   Agent 06   │◄─── QUALITY GATE            │
+│                                    │    Critic    │     (Critical)              │
+│                                    │ Verification │                             │
+│                                    └───────┬──────┘                             │
+│                                            │                                     │
+│                                      ┌─────┴─────┐                              │
+│                                      │   PASS?   │                              │
+│                                      └─────┬─────┘                              │
+│                                   YES │   │ NO                                  │
+│                              ┌────────┘   └─────────┐                           │
+│                              ▼                      ▼                           │
+│                     ┌──────────────┐        ┌────────────┐                     │
+│                     │   Agent 07   │        │  Re-run    │                     │
+│                     │  Synthesis   │        │  Failed    │                     │
+│                     │   & Report   │        │  Agents    │                     │
+│                     └───────┬──────┘        └────────────┘                     │
+│                             │                                                    │
+└─────────────────────────────┼────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         DATA & PERSISTENCE LAYER                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │   MongoDB    │  │   Qdrant     │  │    Redis     │  │   AWS S3     │      │
+│  │   Atlas      │  │  (Vectors)   │  │   (Cache)    │  │   (PDFs)     │      │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
+└─────────┼──────────────────┼──────────────────┼──────────────────┼──────────────┘
+          │                  │                  │                  │
+          ▼                  ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         EXTERNAL DATA SOURCES                                    │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  GDELT   │  FRED  │  Yahoo Finance  │  Alpha Vantage  │  Reddit  │  Twitter    │
+│  Reuters │  IMF   │  World Bank     │  CBOE VIX       │  Options │  Fear&Greed │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         OBSERVABILITY & SECURITY                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  LangFuse (Traces)  │  Grafana (Metrics)  │  Vault (Secrets)  │  PromptFoo    │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Agent Pipeline Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         QUERY SUBMISSION & ROUTING                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+User Query: "Analyze geopolitical risks for Gold over the next 30 days"
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ AGENT 01: Intake & Routing (Mistral 7B via Groq)                                │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Input:  Raw user query                                                           │
+│ Process: • Parse query intent                                                    │
+│          • Extract: asset_class="Gold", timeframe=30, risk_profile="moderate"   │
+│          • Validate schema with Pydantic                                         │
+│          • Generate task graph for downstream agents                             │
+│ Output:  Structured task object → LangGraph state                               │
+│ Time:    ~0.5 seconds                                                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│              PARALLEL INTELLIGENCE GATHERING PHASE                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+     │
+     ├──────────────────────────┬──────────────────────────┬───────────────────────┐
+     ▼                          ▼                          ▼                       ▼
+┏━━━━━━━━━━━━━━━━━━━━┓  ┏━━━━━━━━━━━━━━━━━━━━┓  ┏━━━━━━━━━━━━━━━━━━━━┓
+┃ AGENT 02:          ┃  ┃ AGENT 03:          ┃  ┃ AGENT 04:          ┃
+┃ Geopolitical       ┃  ┃ Market Sentiment   ┃  ┃ Asset Analyst      ┃
+┃ (DeepSeek-V3)      ┃  ┃ (Qwen2.5-72B)      ┃  ┃ (DeepSeek-R1)      ┃
+┣━━━━━━━━━━━━━━━━━━━━┫  ┣━━━━━━━━━━━━━━━━━━━━┫  ┣━━━━━━━━━━━━━━━━━━━━┫
+┃ • Query GDELT      ┃  ┃ • Fetch news feeds ┃  ┃ • Gold-specific    ┃
+┃ • Retrieve FRED    ┃  ┃ • Scan Reddit WSB  ┃  ┃   modeling         ┃
+┃ • Geopolitical     ┃  ┃ • Twitter trending ┃  ┃ • Historical price ┃
+┃   stability score  ┃  ┃ • Fear & Greed idx ┃  ┃   patterns         ┃
+┃ • Event vectors    ┃  ┃ • Sentiment scores ┃  ┃ • Pressure scores  ┃
+┃ Time: ~3-4 sec     ┃  ┃ Time: ~2-3 sec     ┃  ┃ Time: ~3-4 sec     ┃
+┗━━━━━━━━━━━━━━━━━━━━┛  ┗━━━━━━━━━━━━━━━━━━━━┛  ┗━━━━━━━━━━━━━━━━━━━━┛
+     │                          │                          │
+     └──────────────────────────┴──────────────────────────┴───────────────────────┐
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ AGENT 05: Quant & Risk Aggregation (DeepSeek-R1 Full via OpenRouter)            │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Input:  Outputs from Agents 02, 03, 04                                          │
+│ Process: • Aggregate signals across agents                                       │
+│          • Run Monte Carlo simulations (1000 iterations)                         │
+│          • GARCH volatility modeling                                             │
+│          • Correlation breakdown analysis                                        │
+│          • Scenario probability calculation                                      │
+│ Output:  Risk matrix with probability-weighted scenarios                        │
+│ Time:    ~5-7 seconds                                                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ AGENT 06: Critic & Verification (Llama 3.3 70B via Groq) ⚠️ QUALITY GATE       │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Input:  ALL outputs from Agents 02-05                                           │
+│ Process: • Cross-validate internal consistency                                   │
+│          • Verify source citations (100% requirement)                            │
+│          • Flag low-confidence claims (<70%)                                     │
+│          • Check for contradictions between agents                               │
+│          • Calculate overall confidence score                                    │
+│ Decision: PASS / FAIL / REVISE                                                  │
+│ Output:  Verification report + flagged issues                                   │
+│ Time:    ~3-4 seconds                                                            │
+│                                                                                   │
+│ IF FAIL → Re-run specific agent with targeted prompts                           │
+│ IF PASS → Continue to synthesis                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+     │ (PASS)
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ AGENT 07: Report Synthesis (Mistral Small 3 via Groq)                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Input:  Verified outputs + verification report                                  │
+│ Process: • Assemble dashboard JSON payload                                       │
+│          • Generate risk heatmap data                                            │
+│          • Create macro timeline events                                          │
+│          • Format reasoning trace                                                │
+│          • Trigger WeasyPrint for PDF generation                                 │
+│ Output:  • Interactive dashboard                                                │
+│          • Risk heatmap visualization                                            │
+│          • Macro timeline (Gantt)                                                │
+│          • PDF intelligence report                                               │
+│          • Structured reasoning trace (JSON)                                     │
+│ Time:    ~4-5 seconds                                                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         RESPONSE TO USER                                         │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Total Pipeline Time: ~20-30 seconds                                             │
+│ Cost per Analysis: < $0.01                                                      │
+│ Source Attribution: 100%                                                         │
+│ Confidence Score: 87% (example)                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔄 Data Flow Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         INGESTION & PREPROCESSING                                │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+[External APIs] ──► [Data Collectors] ──► [Validation] ──► [Storage]
+                                                                │
+    ┌────────────────────────┬──────────────────┬─────────────┘
+    ▼                        ▼                  ▼
+┌─────────┐          ┌──────────────┐    ┌─────────────────┐
+│ MongoDB │          │   Qdrant     │    │  Redis Cache    │
+│ (Raw)   │          │  (Vectors)   │    │  (Hot Data)     │
+└────┬────┘          └──────┬───────┘    └────────┬────────┘
+     │                      │                      │
+     └──────────────────────┴──────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         RAG RETRIEVAL PIPELINE                                   │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│  Agent Query                                                                     │
+│       │                                                                           │
+│       ▼                                                                           │
+│  ┌─────────────────────┐                                                        │
+│  │ Embedding Generator │  (generates query embedding)                           │
+│  └──────────┬──────────┘                                                        │
+│             ▼                                                                     │
+│  ┌─────────────────────┐                                                        │
+│  │ Qdrant Search       │  (semantic similarity search)                          │
+│  │ Top-K: 20 chunks    │                                                        │
+│  └──────────┬──────────┘                                                        │
+│             ▼                                                                     │
+│  ┌─────────────────────┐                                                        │
+│  │ Re-ranker           │  (confidence scoring)                                  │
+│  │ Top-N: 10 chunks    │                                                        │
+│  └──────────┬──────────┘                                                        │
+│             ▼                                                                     │
+│  ┌─────────────────────┐                                                        │
+│  │ Source Attribution  │  (attach metadata: URL, date, confidence)             │
+│  └──────────┬──────────┘                                                        │
+│             ▼                                                                     │
+│  Retrieved Context + Sources → Agent LLM                                        │
+│                                                                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         AGENT PROCESSING                                         │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│  Context + Query ──► [LLM Inference] ──► Structured Output (Pydantic)          │
+│                           │                                                       │
+│                           ▼                                                       │
+│                    [LangFuse Trace]                                              │
+│                    • Token count                                                 │
+│                    • Latency                                                     │
+│                    • Cost                                                        │
+│                    • Confidence                                                  │
+│                                                                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         OUTPUT PERSISTENCE                                       │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│  Agent Output ──► MongoDB (store) ──► Audit Log                                │
+│       │                                                                           │
+│       ├───► Dashboard API                                                        │
+│       ├───► PDF Generator ──► AWS S3                                            │
+│       └───► WebSocket (real-time updates)                                       │
+│                                                                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🌐 Request/Response Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant FastAPI
+    participant Celery
+    participant LangGraph
+    participant Agent01
+    participant Agent02
+    participant Agent03
+    participant Agent04
+    participant Agent05
+    participant Agent06
+    participant Agent07
+    participant MongoDB
+    participant Qdrant
+    participant Redis
+
+    User->>Frontend: Submit query
+    Frontend->>FastAPI: POST /api/query
+    FastAPI->>FastAPI: Validate JWT
+    FastAPI->>FastAPI: Pydantic validation
+    FastAPI->>Celery: Create async task
+    FastAPI-->>Frontend: task_id + 202 Accepted
+    Frontend-->>User: Show progress indicator
+
+    Celery->>LangGraph: Execute pipeline
+    LangGraph->>Agent01: Parse query
+    Agent01->>Redis: Check cache
+    Agent01->>Agent01: Generate task graph
+    
+    par Parallel Execution
+        LangGraph->>Agent02: Gather geopolitical
+        Agent02->>Qdrant: Query GDELT vectors
+        Qdrant-->>Agent02: Related events
+        Agent02->>MongoDB: Save raw data
+    and
+        LangGraph->>Agent03: Analyze sentiment
+        Agent03->>Qdrant: Query news vectors
+        Qdrant-->>Agent03: Sentiment data
+    and
+        LangGraph->>Agent04: Asset analysis
+        Agent04->>Redis: Fetch market data
+        Redis-->>Agent04: Price history
+    end
+
+    Agent02-->>LangGraph: Geo report
+    Agent03-->>LangGraph: Sentiment report
+    Agent04-->>LangGraph: Asset report
+
+    LangGraph->>Agent05: Aggregate & quantify
+    Agent05->>Agent05: Monte Carlo simulation
+    Agent05-->>LangGraph: Risk matrix
+
+    LangGraph->>Agent06: Verify all outputs
+    Agent06->>Agent06: Cross-validate
+    Agent06->>MongoDB: Check sources
+    
+    alt Verification PASS
+        Agent06-->>LangGraph: PASS + confidence
+        LangGraph->>Agent07: Synthesize report
+        Agent07->>MongoDB: Store final report
+        Agent07->>Redis: Cache result
+        Agent07-->>Celery: Complete
+        Celery-->>Frontend: WebSocket update
+        Frontend-->>User: Display dashboard
+    else Verification FAIL
+        Agent06-->>LangGraph: FAIL + flags
+        LangGraph->>Agent02: Re-run with fixes
+        Note over LangGraph: Retry logic
+    end
+```
+
+---
+
+## �🔐 Security Architecture
 
 **6 Security Layers:**
 1. **Input Sanitization:** Pydantic v2 validation, prompt injection prevention
