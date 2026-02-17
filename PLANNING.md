@@ -56,6 +56,103 @@ SentinelAI provides geopolitical and macroeconomic risk analysis for financial a
 
 **Query Example:** "Analyze geopolitical risks for Gold over the next 30 days"
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        USER QUERY SUBMISSION                                 │
+│  "Analyze geopolitical risks for Gold over the next 30 days"               │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AGENT 01: ROUTING & ORCHESTRATION                        [~0.5s]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Parse query intent                                                       │
+│  • Extract parameters: asset=Gold, timeframe=30d                           │
+│  • Generate task graph for downstream agents                               │
+│  • Validate with Pydantic schema                                           │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PARALLEL INTELLIGENCE GATHERING                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                 │
+                 ┌───────────────┼───────────────┐
+                 │               │               │
+                 ▼               ▼               ▼
+        ┏━━━━━━━━━━━━━┓  ┏━━━━━━━━━━━━━┓  ┏━━━━━━━━━━━━━┓
+        ┃   AGENT 02  ┃  ┃   AGENT 03  ┃  ┃   AGENT 04  ┃
+        ┃ Geopolitical┃  ┃  Sentiment  ┃  ┃    Asset    ┃
+        ┃   [~3-4s]   ┃  ┃   [~2-3s]   ┃  ┃  Analyst    ┃
+        ┣━━━━━━━━━━━━━┫  ┣━━━━━━━━━━━━━┫  ┃   [~3-4s]   ┃
+        ┃• GDELT      ┃  ┃• News feeds ┃  ┣━━━━━━━━━━━━━┫
+        ┃• FRED data  ┃  ┃• Reddit WSB ┃  ┃• Gold model ┃
+        ┃• Stability  ┃  ┃• Twitter    ┃  ┃• Price data ┃
+        ┃  scores     ┃  ┃• Fear&Greed ┃  ┃• Patterns   ┃
+        ┗━━━━━━━┳━━━━━┛  ┗━━━━━━┳━━━━━━┛  ┗━━━━━━┳━━━━━━┛
+                │               │               │
+                └───────────────┼───────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AGENT 05: QUANT & RISK AGGREGATION                       [~5-7s]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Aggregate signals from Agents 02-04                                     │
+│  • Monte Carlo simulations (1000 iterations)                               │
+│  • GARCH volatility modeling                                               │
+│  • Correlation analysis                                                     │
+│  • Probability-weighted scenario generation                                │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AGENT 06: CRITIC & VERIFICATION (Quality Gate)           [~3-4s]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Cross-validate internal consistency                                     │
+│  • Verify 100% source attribution                                          │
+│  • Flag low-confidence claims (<70%)                                       │
+│  • Check for contradictions                                                │
+│  • Calculate overall confidence score                                      │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                        ┌────────┴────────┐
+                        │   PASS/FAIL?    │
+                        └────────┬────────┘
+                    YES │        │ NO
+               ┌────────┘        └────────┐
+               ▼                          ▼
+    ┌──────────────────┐        ┌─────────────────┐
+    │   Continue to    │        │   Re-run failed │
+    │   Synthesis      │        │   agents with   │
+    │                  │        │   corrections   │
+    └────────┬─────────┘        └────────┬────────┘
+             │                           │
+             │                           └──────┐
+             ▼                                  │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AGENT 07: SYNTHESIS & REPORT GENERATION                  [~4-5s]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Assemble dashboard JSON payload                                         │
+│  • Generate risk heatmap data                                              │
+│  • Create macro timeline events                                            │
+│  • Format reasoning trace                                                  │
+│  • Trigger PDF generation (WeasyPrint)                                     │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         OUTPUTS DELIVERED                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ✓ Interactive Dashboard         ✓ Risk Heatmap                           │
+│  ✓ Macro Timeline                 ✓ PDF Report                             │
+│  ✓ Reasoning Trace (JSON)                                                  │
+│                                                                             │
+│  Total Time: ~20-30s  |  Cost: <$0.01  |  Attribution: 100%               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Pipeline Summary:**
+
 1. **Agent 01 - Routing (0.5s):** Parse query, extract parameters, generate task graph
 2. **Agents 02-04 - Parallel Execution (3-4s):**
    - Agent 02: GDELT events, FRED data, geopolitical stability
