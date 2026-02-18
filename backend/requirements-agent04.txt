@@ -1,0 +1,26 @@
+# Agent 04 — Universal Asset Engine dependencies
+#
+# Install with:
+#   pip install -r requirements-agent04.txt
+
+# Data
+yfinance>=0.2.36
+
+# Chronos-2 (Amazon time-series foundation model)
+# Pulls in transformers + accelerate automatically
+chronos-forecasting>=1.4.0
+torch>=2.2.0          # CPU inference only; no GPU required
+
+# GARCH volatility modelling
+arch>=6.3.0
+
+# Scientific stack
+numpy>=1.26.0
+pandas>=2.2.0
+
+# LLM — Gemini 2.5 Flash
+langchain-google-genai>=1.0.10
+langchain-core>=0.2.0
+
+# Pydantic (shared with FastAPI)
+pydantic>=2.7.0
