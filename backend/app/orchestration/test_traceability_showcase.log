@@ -1,0 +1,66 @@
+[1m[96m
+SentinelAI Orchestrator Showcase[0m
+[94mGenerated at: 2026-02-18T10:33:33.670159+00:00[0m
+--------------------------------------------------------------------------------------------
+[1m[96m
+[1] Brent | Middle East + Fed posture[0m
+[92m✅ Pipeline integrity checks passed[0m
+[92m✅ Gemini synthesis used successfully[0m
+  Session       : showcase-001
+  Final verdict : PASS
+  Asset         : CL=F
+  Timeframe     : 30 day
+  Risk focus    : macro-risk
+  Security      : risk=low score=0
+  Probabilities : high=72.63% | base=5.23% | low=22.14%
+  Runtime       : 3363.06 ms
+  [95mAgent chain:[0m
+    - agent_01_routing         status=ok confidence=0.93
+    - agent_02_geopolitical    status=ok confidence=0.87
+    - agent_03_sentiment       status=ok confidence=0.81
+    - agent_04_asset_analyst   status=ok confidence=0.79
+    - agent_06_critic          status=ok confidence=0.77
+    - agent_07_synthesis       status=ok confidence=0.85
+  [95mGemini summary:[0m For CL=F over the next 30 days, macro-risk analysis indicates a significantly elevated probability of a high-risk scenario. This outcome is assessed with a 72.63% likelihood. In contrast, the probability for a base-case scenario is notably low at 5.23%, while a low-risk scenario holds a 22.14% chance. This distribution underscores a strong predisposition towards adverse macro-risk outcomes for the asset within the specified timeframe. The overall risk profile is heavily weighted towards high-impact events.
+[1m[96m
+[2] Crypto stress | sanctions + recession[0m
+[92m✅ Pipeline integrity checks passed[0m
+[93m⚠️  Gemini status: not_requested[0m
+  Session       : showcase-002
+  Final verdict : PASS
+  Asset         : BTC-USD
+  Timeframe     : 14 days
+  Risk focus    : volatility
+  Security      : risk=low score=0
+  Probabilities : high=70.89% | base=4.80% | low=24.31%
+  Runtime       : 0.57 ms
+  [95mAgent chain:[0m
+    - agent_01_routing         status=ok confidence=0.93
+    - agent_02_geopolitical    status=ok confidence=0.79
+    - agent_03_sentiment       status=ok confidence=0.81
+    - agent_04_asset_analyst   status=ok confidence=0.79
+    - agent_06_critic          status=ok confidence=0.77
+    - agent_07_synthesis       status=ok confidence=0.85
+[1m[96m
+[3] Security case | prompt injection attempt[0m
+[92m✅ Pipeline integrity checks passed[0m
+[91m🛡️  Gemini blocked by prompt-injection defense (expected for malicious input)[0m
+  Session       : showcase-003
+  Final verdict : PASS
+  Asset         : SPY
+  Timeframe     : 30 days
+  Risk focus    : overall-risk
+  Security      : risk=high score=11
+  Probabilities : high=55.75% | base=6.92% | low=37.33%
+  Runtime       : 0.64 ms
+  [95mAgent chain:[0m
+    - agent_01_routing         status=ok confidence=0.93
+    - agent_02_geopolitical    status=ok confidence=0.78
+    - agent_03_sentiment       status=ok confidence=0.81
+    - agent_04_asset_analyst   status=ok confidence=0.79
+    - agent_06_critic          status=ok confidence=0.77
+    - agent_07_synthesis       status=ok confidence=0.85
+  [95mSecurity reasons:[0m ["Instruction override attempt", "Prompt exfiltration attempt", "Tool-execution coercion"]
+
+============================================================================================
+[92m✅ Orchestrator robustness check complete: 3/3 scenarios passed integrity checks[0m

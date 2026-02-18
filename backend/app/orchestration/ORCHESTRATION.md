@@ -244,6 +244,12 @@ Current test coverage:
 - probability normalization check
 - high-risk injection blocks Gemini status path
 
+Traceability artifacts:
+
+- `TEST_TRACEABILITY.md`
+- `test_traceability_unittest.log`
+- `test_traceability_showcase.log`
+
 ---
 
 ## 11) Error Handling / Common Issues

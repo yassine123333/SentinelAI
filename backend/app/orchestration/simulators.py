@@ -131,8 +131,13 @@ class SimulationEngine:
             if alias in lowered:
                 return ticker
 
-        token_match = re.findall(r"\b[A-Z0-9\^=\-\.]{1,12}\b", original)
+        token_match = re.findall(
+            r"(?:\^[A-Z]{1,10}|[A-Z]{1,6}=F|[A-Z]{2,8}(?:-[A-Z]{2,6})?|[A-Z]{2,10}\.[A-Z]{1,4})",
+            original,
+        )
         for token in token_match:
+            if not re.search(r"[A-Z0-9]", token):
+                continue
             if token.isdigit():
                 continue
             return token
