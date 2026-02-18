@@ -65,6 +65,7 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         google_api_key=api_key,
         temperature=1.0,           # required for thinking mode
         thinking_budget=_THINKING_BUDGET,
+        request_timeout=60,        # fail fast if Gemini hangs; don't block the DAG
     )
 
 
@@ -274,13 +275,17 @@ def _parse_llm_response(raw_text: str) -> LLMInterpretation:
 
     Gemini thinking-mode prepends its <think>…</think> block before the
     answer; we strip that if present before JSON parsing.
+
+    Raises ValueError with a descriptive message if the response cannot
+    be parsed — the caller's try/except returns a degraded interpretation.
     """
     text = raw_text.strip()
 
     # Strip any <think>…</think> block that thinking mode may expose
-    if "<think>" in text and "</think>" in text:
-        start = text.index("</think>") + len("</think>")
-        text = text[start:].strip()
+    # Using find() instead of index() to avoid ValueError on malformed blocks
+    think_end = text.find("</think>")
+    if "<think>" in text and think_end != -1:
+        text = text[think_end + len("</think>"):].strip()
 
     # Strip markdown code fences if the model emitted them despite instructions
     if text.startswith("```"):
@@ -290,16 +295,28 @@ def _parse_llm_response(raw_text: str) -> LLMInterpretation:
             if not line.strip().startswith("```")
         ).strip()
 
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Gemini returned non-JSON output (first 200 chars): "
+            f"{text[:200]!r}"
+        ) from exc
 
-    return LLMInterpretation(
-        model_agreement=ModelAgreement(data["model_agreement"]),
-        risk_rating=RiskRating(data["risk_rating"]),
-        key_findings=data.get("key_findings", []),
-        tensions=data.get("tensions", []),
-        reasoning_trace=data.get("reasoning_trace", ""),
-        confidence=float(data.get("confidence", 0.5)),
-    )
+    try:
+        return LLMInterpretation(
+            model_agreement=ModelAgreement(data["model_agreement"]),
+            risk_rating=RiskRating(data["risk_rating"]),
+            key_findings=data.get("key_findings", []),
+            tensions=data.get("tensions", []),
+            reasoning_trace=data.get("reasoning_trace", ""),
+            confidence=float(data.get("confidence", 0.5)),
+        )
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"Gemini JSON missing required fields or invalid enum value: {exc}. "
+            f"Raw keys: {list(data.keys())}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

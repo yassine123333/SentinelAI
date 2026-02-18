@@ -38,6 +38,26 @@ logger = logging.getLogger(__name__)
 CHRONOS_MODEL_ID = "amazon/chronos-t5-small"
 NUM_SAMPLES = 100
 
+# ---------------------------------------------------------------------------
+# Module-level pipeline singleton
+# Loaded once per process; reused across all ticker calls.
+# Avoids reloading 250 MB weights on every forecast request.
+# ---------------------------------------------------------------------------
+_PIPELINE = None
+
+
+def _get_pipeline(torch):
+    global _PIPELINE
+    if _PIPELINE is None:
+        logger.info("Loading Chronos pipeline (first call — subsequent calls reuse cache)")
+        from chronos import ChronosPipeline  # noqa: PLC0415
+        _PIPELINE = ChronosPipeline.from_pretrained(
+            CHRONOS_MODEL_ID,
+            device_map="cpu",
+            dtype=torch.float32,
+        )
+    return _PIPELINE
+
 # Asset-class heuristics for normalising spread_pct → [0, 1]
 # spread_pct >= HIGH_SPREAD_PCT → uncertainty_score = 1.0
 # spread_pct == 0               → uncertainty_score = 0.0
@@ -103,21 +123,8 @@ def run_chronos_forecast(
 
 
 def _load_pipeline(torch):
-    """
-    Load (or retrieve from cache) the Chronos-T5-Small pipeline.
-
-    The model is downloaded once and cached in the HuggingFace hub cache.
-    Subsequent calls load from disk in ~1 second.
-    """
-    from chronos import ChronosPipeline  # noqa: PLC0415
-
-    logger.debug("Loading Chronos pipeline: %s", CHRONOS_MODEL_ID)
-    pipeline = ChronosPipeline.from_pretrained(
-        CHRONOS_MODEL_ID,
-        device_map="cpu",
-        dtype=torch.float32,
-    )
-    return pipeline
+    """Return the singleton Chronos pipeline, initialising it on first call."""
+    return _get_pipeline(torch)
 
 
 def _predict(pipeline, torch, close_prices: list[float], horizon: int):
