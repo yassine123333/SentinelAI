@@ -33,6 +33,7 @@ from ..resources.schemas import (
     MonteCarloResult,
     VolatilityRegime,
 )
+from .cache import CacheNamespace, get_cached, make_key, set_cached
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,18 @@ _REGIME_THRESHOLDS = {
     VolatilityRegime.EXTREME:  (50.0, float("inf")),
 }
 
+# At α+β ≥ 0.98 the process is near-IGARCH: shocks are effectively permanent
+# and variance is non-stationary. The regime label is elevated one tier to
+# prevent a structurally unstable process from being labelled as benign.
+_IGARCH_THRESHOLD = 0.98
+
+_REGIME_ELEVATION = {
+    VolatilityRegime.LOW:      VolatilityRegime.NORMAL,
+    VolatilityRegime.NORMAL:   VolatilityRegime.ELEVATED,
+    VolatilityRegime.ELEVATED: VolatilityRegime.EXTREME,
+    VolatilityRegime.EXTREME:  VolatilityRegime.EXTREME,  # already at ceiling
+}
+
 
 # ---------------------------------------------------------------------------
 # GARCH public entry point
@@ -65,12 +78,22 @@ def run_garch(
     """
     Fit GARCH(1,1) to the log-return series of *close_prices*.
 
+    Results are cached for 30 minutes — GARCH is deterministic given the
+    same return series, so there is no value in refitting within that window.
+
     Returns a GARCHResult; on failure, result.error is set and safe
     defaults are used so the Monte Carlo step can still run with a
     fallback volatility estimate.
     """
     if len(close_prices) < 20:
         return _garch_error(ticker, "Too few prices for GARCH (need ≥ 20).")
+
+    cache_key = make_key("garch", ticker, len(close_prices), round(close_prices[-1], 4), forecast_horizon)
+    cached = get_cached(CacheNamespace.MODEL, cache_key)
+    if cached is not None:
+        logger.debug("Cache HIT [garch] %s", ticker)
+        return cached
+    logger.debug("Cache MISS [garch] %s — fitting model", ticker)
 
     try:
         from arch import arch_model  # noqa: PLC0415
@@ -120,15 +143,16 @@ def run_garch(
             float(np.sqrt(v)) for v in np.asarray(fc.variance).flat[-forecast_horizon:]
         ]
 
-        regime = _classify_regime(current_annual_vol)
+        regime, igarch_warning = _classify_regime(current_annual_vol, persistence)
 
         logger.info(
             "GARCH(%s) | alpha=%.4f beta=%.4f persistence=%.4f | "
-            "current_ann_vol=%.1f%% | regime=%s",
-            ticker, alpha, beta, persistence, current_annual_vol, regime.value,
+            "current_ann_vol=%.1f%% | regime=%s | igarch=%s",
+            ticker, alpha, beta, persistence, current_annual_vol,
+            regime.value, igarch_warning,
         )
 
-        return GARCHResult(
+        result = GARCHResult(
             ticker=ticker,
             params=GARCHParams(
                 omega=round(omega, 8),
@@ -142,8 +166,11 @@ def run_garch(
             current_annualised_vol=round(current_annual_vol, 4),
             vol_regime=regime,
             vol_forecast_daily=[round(v, 6) for v in daily_vol_forecast],
+            igarch_warning=igarch_warning,
             error=None,
         )
+        set_cached(CacheNamespace.MODEL, cache_key, result)
+        return result
 
     except Exception as exc:
         logger.error("GARCH fitting failed for %s: %s", ticker, exc)
@@ -164,6 +191,9 @@ def run_monte_carlo(
     """
     Run N_SIMULATIONS forward price paths using the GARCH volatility schedule.
 
+    Results are cached for 30 minutes keyed on the GARCH annual vol (which
+    fully summarises the vol schedule used as input to the simulation).
+
     If GARCH failed, falls back to a rolling historical volatility estimate
     so the simulation still runs with degraded but usable inputs.
 
@@ -174,6 +204,19 @@ def run_monte_carlo(
     garch_result    : Output of run_garch(); may contain an error.
     forecast_horizon: Number of days to simulate forward.
     """
+    cache_key = make_key(
+        "mc", ticker,
+        len(close_prices),
+        round(close_prices[-1], 4),
+        round(garch_result.current_annualised_vol, 4),
+        forecast_horizon,
+    )
+    cached = get_cached(CacheNamespace.MODEL, cache_key)
+    if cached is not None:
+        logger.debug("Cache HIT [monte_carlo] %s", ticker)
+        return cached
+    logger.debug("Cache MISS [monte_carlo] %s — running simulation", ticker)
+
     current_price = close_prices[-1]
     returns = _log_returns_pct(close_prices)
     mu = float(np.mean(returns))  # historical mean daily return (%)
@@ -192,7 +235,10 @@ def run_monte_carlo(
 
     try:
         paths = _simulate_paths(current_price, mu, daily_vols, forecast_horizon)
-        return _build_mc_result(ticker, current_price, paths, forecast_horizon)
+        result = _build_mc_result(ticker, current_price, paths, forecast_horizon)
+        if result.error is None:
+            set_cached(CacheNamespace.MODEL, cache_key, result)
+        return result
 
     except Exception as exc:
         logger.error("Monte Carlo failed for %s: %s", ticker, exc)
@@ -229,10 +275,33 @@ def _annualise(daily_vol_pct: float) -> float:
     return daily_vol_pct * np.sqrt(TRADING_DAYS_PER_YEAR)
 
 
-def _classify_regime(annual_vol_pct: float) -> VolatilityRegime:
+def _classify_regime(annual_vol_pct: float, persistence: float) -> tuple[VolatilityRegime, bool]:
+    """
+    Return (regime, igarch_warning).
+
+    The base regime is determined by annualised vol level alone.
+    If persistence ≥ _IGARCH_THRESHOLD the regime is elevated one tier:
+    a near-IGARCH process labelled 'NORMAL' is structurally misleading
+    because its volatility shocks are effectively permanent.
+    """
+    base_regime = VolatilityRegime.EXTREME
     for regime, (lo, hi) in _REGIME_THRESHOLDS.items():
         if lo <= annual_vol_pct < hi:
-            return regime
+            base_regime = regime
+            break
+
+    igarch_warning = persistence >= _IGARCH_THRESHOLD
+    if igarch_warning:
+        final_regime = _REGIME_ELEVATION[base_regime]
+        logger.warning(
+            "IGARCH detected (persistence=%.4f ≥ %.2f): regime elevated "
+            "%s → %s. Volatility shocks are effectively permanent.",
+            persistence, _IGARCH_THRESHOLD,
+            base_regime.value, final_regime.value,
+        )
+        return final_regime, True
+
+    return base_regime, False
     return VolatilityRegime.EXTREME
 
 

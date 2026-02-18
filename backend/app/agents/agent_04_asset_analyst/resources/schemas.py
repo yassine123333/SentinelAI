@@ -204,11 +204,26 @@ class GARCHResult(BaseModel):
     current_annualised_vol: float = Field(
         description="Current conditional volatility, annualised (%)."
     )
-    vol_regime: VolatilityRegime
+    vol_regime: VolatilityRegime = Field(
+        description=(
+            "Qualitative regime label. Accounts for both the current vol level "
+            "and the persistence parameter — near-IGARCH processes are elevated "
+            "by one tier regardless of spot vol."
+        )
+    )
     vol_forecast_daily: list[float] = Field(
         description=(
             "GARCH-projected daily conditional vol (%) for each forecast day."
         )
+    )
+    igarch_warning: bool = Field(
+        default=False,
+        description=(
+            "True when α+β ≥ 0.98, indicating near-Integrated GARCH behaviour: "
+            "volatility shocks are effectively permanent and variance is "
+            "non-stationary. The regime label has been elevated one tier to "
+            "reflect this structural instability."
+        ),
     )
 
     error: Optional[str] = None

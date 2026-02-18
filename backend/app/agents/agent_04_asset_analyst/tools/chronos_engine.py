@@ -28,6 +28,7 @@ from typing import Optional
 import numpy as np
 
 from ..resources.schemas import ChronosResult
+from .cache import CacheNamespace, get_cached, make_key, set_cached
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,9 @@ def run_chronos_forecast(
     """
     Run Chronos-2 on *close_prices* and return a ChronosResult.
 
+    Results are cached for 30 minutes keyed on (ticker, last_price, horizon)
+    so repeated calls within a pipeline retry skip the ~5s inference step.
+
     Parameters
     ----------
     ticker          : Used only for metadata / logging.
@@ -94,6 +98,14 @@ def run_chronos_forecast(
     """
     if len(close_prices) < 10:
         return _error_result(ticker, forecast_horizon, "Too few prices for Chronos-2.")
+
+    # Cache key includes last price and series length as a proxy for data identity
+    cache_key = make_key("chronos", ticker, len(close_prices), round(close_prices[-1], 4), forecast_horizon)
+    cached = get_cached(CacheNamespace.MODEL, cache_key)
+    if cached is not None:
+        logger.debug("Cache HIT [chronos] %s", ticker)
+        return cached
+    logger.debug("Cache MISS [chronos] %s — running inference", ticker)
 
     try:
         import torch  # noqa: PLC0415
@@ -110,7 +122,10 @@ def run_chronos_forecast(
         forecast_tensor = _predict(
             pipeline, torch, close_prices, forecast_horizon
         )
-        return _build_result(ticker, close_prices, forecast_horizon, forecast_tensor)
+        result = _build_result(ticker, close_prices, forecast_horizon, forecast_tensor)
+        if result.error is None:
+            set_cached(CacheNamespace.MODEL, cache_key, result)
+        return result
 
     except Exception as exc:
         logger.error("Chronos-2 forecast failed for %s: %s", ticker, exc)

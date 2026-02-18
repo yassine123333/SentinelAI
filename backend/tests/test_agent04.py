@@ -34,6 +34,7 @@ from app.agents.agent_04_asset_analyst.tools.garch_monte_carlo import (
     run_garch,
     run_monte_carlo,
 )
+from app.agents.agent_04_asset_analyst.tools.cache import clear_all, cache_stats
 from app.agents.agent_04_asset_analyst.resources.schemas import DataQuality
 
 # ---------------------------------------------------------------------------
@@ -101,12 +102,13 @@ def test_garch_fits():
         f"Unusual persistence: {result.params.persistence}"
     assert result.current_annualised_vol > 0
 
+    igarch_flag = " ⚠ IGARCH" if result.igarch_warning else ""
     _print_ok(
         f"[L3-GARCH] {f['ticker']} | "
         f"alpha={result.params.alpha:.4f} beta={result.params.beta:.4f} "
         f"persist={result.params.persistence:.4f} | "
         f"ann_vol={result.current_annualised_vol:.2f}% | "
-        f"regime={result.vol_regime.value}"
+        f"regime={result.vol_regime.value}{igarch_flag}"
     )
 
 
@@ -269,6 +271,87 @@ def run_full_agent(ticker: str = "GC=F", asset_name: str = "Gold Futures"):
 # CLI entry point
 # ===========================================================================
 
+# ===========================================================================
+# CACHE TEST
+# ===========================================================================
+
+def test_cache():
+    """
+    Verify the TTL cache works by calling each tool twice and comparing timing.
+    First call = MISS (live work), second call = HIT (near-zero latency).
+    """
+    f = DEFAULT_FIXTURE
+    ticker, lookback, horizon = f["ticker"], f["lookback"], f["horizon"]
+
+    # Start clean
+    clear_all()
+    print(f"\n  Cache cleared. Running two identical calls for {ticker}...\n")
+
+    # --- DATA CACHE ---
+    t0 = time.perf_counter()
+    r1 = fetch_asset_data(ticker, f["asset_name"], lookback)
+    miss_time = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    r2 = fetch_asset_data(ticker, f["asset_name"], lookback)
+    hit_time = time.perf_counter() - t0
+
+    assert r1.close_prices == r2.close_prices, "Cache returned different data"
+    speedup = miss_time / hit_time if hit_time > 0 else float("inf")
+    _print_ok(
+        f"[cache/data]  MISS={miss_time*1000:.0f}ms  "
+        f"HIT={hit_time*1000:.1f}ms  "
+        f"speedup={speedup:.0f}x"
+    )
+    assert hit_time < miss_time * 0.1, \
+        f"Cache HIT ({hit_time*1000:.1f}ms) should be <10% of MISS ({miss_time*1000:.0f}ms)"
+
+    # --- GARCH CACHE ---
+    t0 = time.perf_counter()
+    g1 = run_garch(ticker, r1.close_prices, horizon)
+    miss_time = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    g2 = run_garch(ticker, r1.close_prices, horizon)
+    hit_time = time.perf_counter() - t0
+
+    assert g1.params.alpha == g2.params.alpha, "Cache returned different GARCH params"
+    speedup = miss_time / hit_time if hit_time > 0 else float("inf")
+    _print_ok(
+        f"[cache/garch] MISS={miss_time*1000:.0f}ms  "
+        f"HIT={hit_time*1000:.1f}ms  "
+        f"speedup={speedup:.0f}x"
+    )
+    assert hit_time < miss_time * 0.1, \
+        f"Cache HIT ({hit_time*1000:.1f}ms) should be <10% of MISS ({miss_time*1000:.0f}ms)"
+
+    # --- MONTE CARLO CACHE ---
+    t0 = time.perf_counter()
+    m1 = run_monte_carlo(ticker, r1.close_prices, g1, horizon)
+    miss_time = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    m2 = run_monte_carlo(ticker, r1.close_prices, g1, horizon)
+    hit_time = time.perf_counter() - t0
+
+    assert m1.median_return_pct == m2.median_return_pct, "Cache returned different MC results"
+    speedup = miss_time / hit_time if hit_time > 0 else float("inf")
+    _print_ok(
+        f"[cache/mc]    MISS={miss_time*1000:.0f}ms  "
+        f"HIT={hit_time*1000:.1f}ms  "
+        f"speedup={speedup:.0f}x"
+    )
+    assert hit_time < miss_time * 0.1, \
+        f"Cache HIT ({hit_time*1000:.1f}ms) should be <10% of MISS ({miss_time*1000:.0f}ms)"
+
+    # Final stats
+    stats = cache_stats()
+    _print_ok(
+        f"[cache/stats] data={stats['data_cache']['size']} entries  "
+        f"model={stats['model_cache']['size']} entries"
+    )
+
+
 def _print_ok(msg: str):
     print(f"  ✓  {msg}")
 
@@ -292,6 +375,11 @@ if __name__ == "__main__":
         test_monte_carlo_runs()
         test_chronos_forecast()
         print("\nAll layer tests passed.\n")
+
+    if "--cache" in args:
+        print("\n=== CACHE TEST ===\n")
+        test_cache()
+        print("\nCache test passed.\n")
 
     if "--full" in args:
         # Optionally pass a ticker: --full AAPL

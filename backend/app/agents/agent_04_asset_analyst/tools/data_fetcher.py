@@ -25,6 +25,8 @@ from typing import Optional
 import numpy as np
 import yfinance as yf
 
+from .cache import CacheNamespace, get_cached, make_key, set_cached
+
 # Suppress yfinance's own stderr chatter (404s, "possibly delisted", etc.)
 # Our validation layer handles these cases explicitly via DataQuality.FAILED
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -59,6 +61,9 @@ def fetch_asset_data(
     """
     Download and validate OHLCV data for *ticker*.
 
+    Results are cached for 60 minutes so repeated calls for the same ticker
+    within a pipeline retry or multi-asset run skip the yfinance HTTP round-trip.
+
     Parameters
     ----------
     ticker       : Exchange-standard ticker resolved by Agent 01.
@@ -70,6 +75,13 @@ def fetch_asset_data(
     DataFetchResult — always returned, never raised.
     quality == FAILED when the data is completely unusable.
     """
+    cache_key = make_key("data", ticker, lookback_days)
+    cached = get_cached(CacheNamespace.DATA, cache_key)
+    if cached is not None:
+        logger.debug("Cache HIT [data] %s", ticker)
+        return cached
+    logger.debug("Cache MISS [data] %s — fetching from yfinance", ticker)
+
     end_dt   = datetime.now(tz=timezone.utc)
     start_dt = end_dt - timedelta(days=lookback_days + 10)  # buffer for weekends
 
@@ -104,7 +116,7 @@ def fetch_asset_data(
     # --- Validation ------------------------------------------------------
     quality, notes = _validate(close_prices, bars)
 
-    return DataFetchResult(
+    result = DataFetchResult(
         ticker=ticker,
         asset_name=asset_name,
         bars=bars,
@@ -116,6 +128,11 @@ def fetch_asset_data(
         ovx_current=ovx_current,
         error=None,
     )
+    # Only cache clean/usable results — don't cache FAILED so a retry
+    # can attempt a fresh download
+    if result.quality.value != "failed":
+        set_cached(CacheNamespace.DATA, cache_key, result)
+    return result
 
 
 # ---------------------------------------------------------------------------
