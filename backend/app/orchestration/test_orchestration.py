@@ -24,7 +24,7 @@ class TestSentinelOrchestration(unittest.TestCase):
         self.assertEqual(result.session_id, "unit-001")
         self.assertEqual(len(result.reports), 6)
         self.assertEqual(result.reports[0].agent_name, "agent_01_routing")
-        self.assertEqual(result.reports[-1].agent_name, "agent_07_synthesis")
+        self.assertEqual(result.reports[-1].agent_name, "agent_06_report_synthesis")
         self.assertIn("parallel: agent_02_geopolitical and agent_03_sentiment executed concurrently", result.reasoning_trace)
 
         total = sum(result.scenario_probabilities.values())
@@ -34,11 +34,13 @@ class TestSentinelOrchestration(unittest.TestCase):
         pipeline = result.normalized_input.get("pipeline", {})
         timing = pipeline.get("timing_ms", {})
         runtime = pipeline.get("orchestration_runtime")
+        key_source = pipeline.get("gemini_key_source")
         self.assertIn(runtime, {"langgraph", "sequential-fallback"})
+        self.assertIn(key_source, {"vault", "env", "missing"})
         self.assertIn("agent_01_routing", timing)
         self.assertIn("agent_02_geopolitical", timing)
         self.assertIn("agent_03_sentiment", timing)
-        self.assertIn("agent_07_synthesis", timing)
+        self.assertIn("agent_06_report_synthesis", timing)
         self.assertGreaterEqual(timing["agent_01_routing"], 0.0)
 
     def test_high_risk_prompt_injection_blocks_gemini(self) -> None:

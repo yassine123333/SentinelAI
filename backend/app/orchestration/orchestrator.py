@@ -49,14 +49,7 @@ class SentinelOrchestrator:
         self.settings = load_settings()
         self._gemini_client: GeminiClient | None = None
         self._workflow = self._build_workflow() if LANGGRAPH_AVAILABLE else None
-        if self.settings.gemini_enabled:
-            self._gemini_client = GeminiClient(
-                api_key=self.settings.google_api_key or "",
-                model=self.settings.gemini_model,
-                timeout_seconds=self.settings.gemini_timeout_seconds,
-                max_retries=self.settings.gemini_max_retries,
-                retry_backoff_seconds=self.settings.gemini_retry_backoff_seconds,
-            )
+        self._refresh_gemini_client(force=True)
 
     def run(self, request: OrchestrationRequest, simulation: bool = True) -> OrchestrationResult:
         if not simulation:
@@ -64,10 +57,12 @@ class SentinelOrchestrator:
                 "Non-simulation execution depends on per-agent implementations that are not yet integrated."
             )
 
+        self._refresh_gemini_client(force=request.use_gemini)
+
         state: OrchestratorState = {
             "request": request,
             "started_at": utc_now_iso(),
-            "trace": [],
+            "trace": [f"secrets: gemini_key_source={self.settings.secret_source}"],
             "reports": [],
             "timing_ms": {},
         }
@@ -80,22 +75,50 @@ class SentinelOrchestrator:
 
         return final_state["result"]
 
+    def _refresh_gemini_client(self, force: bool = False) -> None:
+        if not force and self.settings.gemini_enabled:
+            return
+
+        updated_settings = load_settings()
+        previous_key = self.settings.google_api_key
+        previous_model = self.settings.gemini_model
+        self.settings = updated_settings
+
+        if not updated_settings.gemini_enabled:
+            self._gemini_client = None
+            return
+
+        if (
+            self._gemini_client
+            and previous_key == updated_settings.google_api_key
+            and previous_model == updated_settings.gemini_model
+        ):
+            return
+
+        self._gemini_client = GeminiClient(
+            api_key=updated_settings.google_api_key or "",
+            model=updated_settings.gemini_model,
+            timeout_seconds=updated_settings.gemini_timeout_seconds,
+            max_retries=updated_settings.gemini_max_retries,
+            retry_backoff_seconds=updated_settings.gemini_retry_backoff_seconds,
+        )
+
     def _build_workflow(self) -> Any:
         builder = StateGraph(OrchestratorState)
         builder.add_node("security_gate", self._node_security_gate)
         builder.add_node("agent_01_routing", self._node_routing)
         builder.add_node("parallel_02_03", self._node_parallel_analysis)
         builder.add_node("agent_04_asset_analyst", self._node_asset_analyst)
-        builder.add_node("agent_06_critic", self._node_critic)
-        builder.add_node("agent_07_synthesis", self._node_synthesis)
+        builder.add_node("agent_05_critic", self._node_critic)
+        builder.add_node("agent_06_report_synthesis", self._node_synthesis)
 
         builder.add_edge(START, "security_gate")
         builder.add_edge("security_gate", "agent_01_routing")
         builder.add_edge("agent_01_routing", "parallel_02_03")
         builder.add_edge("parallel_02_03", "agent_04_asset_analyst")
-        builder.add_edge("agent_04_asset_analyst", "agent_06_critic")
-        builder.add_edge("agent_06_critic", "agent_07_synthesis")
-        builder.add_edge("agent_07_synthesis", END)
+        builder.add_edge("agent_04_asset_analyst", "agent_05_critic")
+        builder.add_edge("agent_05_critic", "agent_06_report_synthesis")
+        builder.add_edge("agent_06_report_synthesis", END)
         return builder.compile()
 
     def _invoke_sequential_fallback(self, state: OrchestratorState) -> OrchestratorState:
@@ -277,13 +300,13 @@ class SentinelOrchestrator:
             sentiment_score=sentiment_score,
             implied_risk=float(asset_metrics["implied_risk"]),
         )
-        timing_ms["agent_06_critic"] = round((perf_counter() - t_critic) * 1000, 3)
+        timing_ms["agent_05_critic"] = round((perf_counter() - t_critic) * 1000, 3)
         reports.append(
             AgentReport(
-                agent_name="agent_06_critic",
+                agent_name="agent_05_critic",
                 status="ok",
                 confidence=0.77,
-                payload={"verdict": critic_verdict, "timing_ms": timing_ms["agent_06_critic"]},
+                payload={"verdict": critic_verdict, "timing_ms": timing_ms["agent_05_critic"]},
                 reasoning=critic_reason,
             )
         )
@@ -321,6 +344,7 @@ class SentinelOrchestrator:
             "gemini_status": "not_requested",
             "pipeline": {
                 "orchestration_runtime": "langgraph" if self._workflow else "sequential-fallback",
+                "gemini_key_source": self.settings.secret_source,
                 "parallel_stage": ["agent_02_geopolitical", "agent_03_sentiment"],
                 "timing_ms": timing_ms,
             },
@@ -350,19 +374,19 @@ class SentinelOrchestrator:
                 trace.append("synthesis: gemini requested but fallback used")
         elif request.use_gemini and not self._gemini_client:
             synthesis_payload["gemini_status"] = "missing_api_key"
-            trace.append("synthesis: gemini requested but GOOGLE_API_KEY missing")
+            trace.append("synthesis: gemini requested but no key resolved from vault/env")
 
         reports.append(
             AgentReport(
-                agent_name="agent_07_synthesis",
+                agent_name="agent_06_report_synthesis",
                 status="ok",
                 confidence=0.85,
                 payload=synthesis_payload,
                 reasoning=synthesis_reasoning,
             )
         )
-        timing_ms["agent_07_synthesis"] = round((perf_counter() - t_synthesis) * 1000, 3)
-        synthesis_payload["pipeline"]["timing_ms"]["agent_07_synthesis"] = timing_ms["agent_07_synthesis"]
+        timing_ms["agent_06_report_synthesis"] = round((perf_counter() - t_synthesis) * 1000, 3)
+        synthesis_payload["pipeline"]["timing_ms"]["agent_06_report_synthesis"] = timing_ms["agent_06_report_synthesis"]
         trace.append("synthesis: scenario probabilities generated")
 
         result = OrchestrationResult(
@@ -376,6 +400,7 @@ class SentinelOrchestrator:
                 "query": effective_query,
                 "pipeline": {
                     "orchestration_runtime": "langgraph" if self._workflow else "sequential-fallback",
+                    "gemini_key_source": self.settings.secret_source,
                     "parallel_stage": ["agent_02_geopolitical", "agent_03_sentiment"],
                     "timing_ms": timing_ms,
                 },

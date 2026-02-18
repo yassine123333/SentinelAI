@@ -30,8 +30,12 @@ class TestOrchestrationScenarios(unittest.TestCase):
             result.normalized_input.get("pipeline", {}).get("orchestration_runtime"),
             {"langgraph", "sequential-fallback"},
         )
+        self.assertIn(
+            result.normalized_input.get("pipeline", {}).get("gemini_key_source"),
+            {"vault", "env", "missing"},
+        )
         self.assertEqual(result.reports[0].agent_name, "agent_01_routing")
-        self.assertEqual(result.reports[-1].agent_name, "agent_07_synthesis")
+        self.assertEqual(result.reports[-1].agent_name, "agent_06_report_synthesis")
         self.assertTrue(
             any(
                 "parallel: agent_02_geopolitical and agent_03_sentiment executed concurrently" in line

@@ -100,7 +100,7 @@ def run_showcase() -> int:
         checks = [
             len(result.reports) == 6,
             result.reports[0].agent_name == "agent_01_routing",
-            result.reports[-1].agent_name == "agent_07_synthesis",
+            result.reports[-1].agent_name == "agent_06_report_synthesis",
             abs(sum(probs.values()) - 1.0) <= 0.001,
             any("parallel: agent_02_geopolitical and agent_03_sentiment executed concurrently" in t for t in result.reasoning_trace),
         ]

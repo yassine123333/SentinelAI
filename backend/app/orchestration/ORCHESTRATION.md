@@ -56,15 +56,15 @@ validate pipeline behavior before all real agents are integrated.
 
 Current orchestration flow in LangGraph:
 
-`START` → `security_gate` → `agent_01_routing` → `parallel_02_03` → `agent_04_asset_analyst` → `agent_06_critic` → `agent_07_synthesis` → `END`
+`START` → `security_gate` → `agent_01_routing` → `parallel_02_03` → `agent_04_asset_analyst` → `agent_05_critic` → `agent_06_report_synthesis` → `END`
 
 Agent-level progression:
 
 1. `agent_01_routing`
 2. `agent_02_geopolitical` **in parallel with** `agent_03_sentiment`
 3. `agent_04_asset_analyst`
-4. `agent_06_critic`
-5. `agent_07_synthesis`
+4. `agent_05_critic`
+5. `agent_06_report_synthesis`
 
 ### Runtime behavior
 
@@ -113,7 +113,7 @@ How routing resolves values:
 - `normalized_input`
 	- includes effective/sanitized query
 	- includes security metadata (`prompt_injection_risk`, `score`, `reasons`)
-	- includes pipeline observability (`pipeline.orchestration_runtime`, `pipeline.parallel_stage`, `pipeline.timing_ms`)
+	- includes pipeline observability (`pipeline.orchestration_runtime`, `pipeline.gemini_key_source`, `pipeline.parallel_stage`, `pipeline.timing_ms`)
 - `reports` (per-agent `AgentReport`)
 - `reasoning_trace` (ordered operational trace)
 - `started_at`, `finished_at` (UTC ISO timestamps)
@@ -161,7 +161,7 @@ The orchestrator still returns deterministic simulation output, but:
 
 ## 7) Gemini Integration
 
-Gemini is only used by `agent_07_synthesis` for narrative enrichment.
+Gemini is only used by `agent_06_report_synthesis` for narrative enrichment.
 
 ### Environment variables
 
@@ -170,6 +170,29 @@ Gemini is only used by `agent_07_synthesis` for narrative enrichment.
 - `GEMINI_TIMEOUT_SECONDS` (default: `20`)
 - `GEMINI_MAX_RETRIES` (default: `2`)
 - `GEMINI_RETRY_BACKOFF_SECONDS` (default: `1.0`)
+
+
+### Vault-first secret management (best practice)
+
+Gemini key resolution order is:
+
+1. HashiCorp Vault (`VAULT_ENABLED=true`)
+2. Environment variable fallback (`GOOGLE_API_KEY` / `GEMINI_API_KEY`)
+
+Vault settings:
+
+- `VAULT_ADDR`
+- `VAULT_TOKEN`
+- `VAULT_NAMESPACE` (optional)
+- `VAULT_MOUNT` (default `secret`)
+- `VAULT_SECRET_PATH` (default `sentinelai/llm`)
+- `VAULT_GEMINI_KEY_FIELD` (default `google_api_key`)
+- `VAULT_REFRESH_INTERVAL_SECONDS` (default `60`)
+
+Rotation behavior:
+
+- On each Gemini-enabled request, the orchestrator refreshes settings and can pick up rotated Vault values.
+- Runtime metadata includes `pipeline.gemini_key_source` (`vault`, `env`, `missing`).
 
 Retry behavior:
 

@@ -6,14 +6,15 @@ This file tracks how each orchestration step is executed, validated, and evidenc
 
 | Step | Component | Input | Output | Control/Validation | Evidence Location |
 |---|---|---|---|---|---|
+| 0S | Secrets Gate (`settings.py` + `app/security/vault.py`) | Vault config + env vars | Gemini API key + source (`vault`/`env`/`missing`) | Vault-first resolution policy, env fallback, refresh-based rotation pickup | `normalized_input.pipeline.gemini_key_source`, `reasoning_trace` (`secrets:*`) |
 | 0 | Security Gate (`security.py`) | Raw user query | Sanitized query + risk score + risk level | Prompt-injection rule scoring; high-risk LLM block flag | `normalized_input.security`, `reasoning_trace` (`security:*`) |
 | 1 | Routing (`agent_01_routing`) | Sanitized query + optional hints | `asset`, `timeframe`, `risk_focus` | Hint precedence, fallback defaults | `reports[agent_01_routing].payload` |
 | 2A | Geopolitical (`agent_02_geopolitical`) | Sanitized query | `risk_score`, `drivers` | Heuristic weighted trigger rules | `reports[agent_02_geopolitical].payload` |
 | 2B | Sentiment (`agent_03_sentiment`) | Sanitized query | `sentiment_score`, `label` | Positive/negative cue scoring | `reports[agent_03_sentiment].payload` |
 | 2P | Parallelization Control (`parallel_02_03` node) | Step 2A + Step 2B | Concurrent execution of both stages | LangGraph node executes `ThreadPoolExecutor(max_workers=2)` with deterministic report ordering | `reasoning_trace` contains parallel marker |
 | 3 | Asset Analyst (`agent_04_asset_analyst`) | Routed asset + geo score + sentiment score | `implied_risk`, regime, low/mid/high move bands | Bounded risk transformation and regime mapping | `reports[agent_04_asset_analyst].payload` |
-| 4 | Critic (`agent_06_critic`) | Geo/sentiment/asset outputs | `PASS` or `REVISE` + reason | Contradiction and consistency checks | `reports[agent_06_critic].payload`, `.reasoning` |
-| 5 | Synthesis (`agent_07_synthesis`) | Pipeline outputs + security policy | Scenario probabilities + optional Gemini summary | Gemini gated by security + key status + fallback path | `reports[agent_07_synthesis].payload` |
+| 4 | Critic (`agent_05_critic`) | Geo/sentiment/asset outputs | `PASS` or `REVISE` + reason | Contradiction and consistency checks | `reports[agent_05_critic].payload`, `.reasoning` |
+| 5 | Synthesis (`agent_06_report_synthesis`) | Pipeline outputs + security policy | Scenario probabilities + optional Gemini summary | Gemini gated by security + key status + fallback path | `reports[agent_06_report_synthesis].payload` |
 | 6 | Final Aggregation | All reports + trace | `OrchestrationResult` | Probability normalization and structured result contract | `scenario_probabilities`, `reports`, `reasoning_trace` |
 
 ### Observability Evidence
@@ -23,6 +24,8 @@ This file tracks how each orchestration step is executed, validated, and evidenc
   - `reports[*].payload.timing_ms` (for stage payloads)
 - Orchestration runtime metadata is attached under:
   - `normalized_input.pipeline.orchestration_runtime`
+- Secret source metadata is attached under:
+  - `normalized_input.pipeline.gemini_key_source`
 - Parallel stage declaration is attached under:
   - `normalized_input.pipeline.parallel_stage`
 
@@ -33,6 +36,10 @@ This file tracks how each orchestration step is executed, validated, and evidenc
   - simulation output still returns normally
 - If Gemini key missing:
   - `gemini_status = missing_api_key`
+- If Vault is enabled and key exists in configured path/field:
+  - `gemini_key_source = vault`
+- If Vault is unavailable/empty and env key exists:
+  - `gemini_key_source = env`
 - If Gemini API fails:
   - `gemini_status = failed_or_empty`
   - `gemini_error` contains error reason
