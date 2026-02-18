@@ -103,6 +103,7 @@ How routing resolves values:
 - `normalized_input`
 	- includes effective/sanitized query
 	- includes security metadata (`prompt_injection_risk`, `score`, `reasons`)
+	- includes pipeline observability (`pipeline.parallel_stage`, `pipeline.timing_ms`)
 - `reports` (per-agent `AgentReport`)
 - `reasoning_trace` (ordered operational trace)
 - `started_at`, `finished_at` (UTC ISO timestamps)
@@ -157,6 +158,13 @@ Gemini is only used by `agent_07_synthesis` for narrative enrichment.
 - `GEMINI_MODEL` (default: `gemini-2.5-flash`)
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 - `GEMINI_TIMEOUT_SECONDS` (default: `20`)
+- `GEMINI_MAX_RETRIES` (default: `2`)
+- `GEMINI_RETRY_BACKOFF_SECONDS` (default: `1.0`)
+
+Retry behavior:
+
+- Exponential retries for transient failures (`429`, `5xx`, timeout/network errors)
+- Graceful fallback when retries are exhausted (`gemini_status=failed_or_empty`)
 
 ### Gemini status field
 
@@ -254,6 +262,7 @@ Traceability artifacts:
 
 - `Gemini HTTP error: 429`
 	- Key/project quota exhausted or unavailable
+	- transient failures are retried with exponential backoff
 	- simulation still returns output through fallback path
 
 - Missing key

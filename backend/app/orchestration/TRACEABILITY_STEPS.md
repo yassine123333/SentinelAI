@@ -16,6 +16,14 @@ This file tracks how each orchestration step is executed, validated, and evidenc
 | 5 | Synthesis (`agent_07_synthesis`) | Pipeline outputs + security policy | Scenario probabilities + optional Gemini summary | Gemini gated by security + key status + fallback path | `reports[agent_07_synthesis].payload` |
 | 6 | Final Aggregation | All reports + trace | `OrchestrationResult` | Probability normalization and structured result contract | `scenario_probabilities`, `reports`, `reasoning_trace` |
 
+### Observability Evidence
+
+- Per-stage runtime metrics are attached under:
+  - `normalized_input.pipeline.timing_ms`
+  - `reports[*].payload.timing_ms` (for stage payloads)
+- Parallel stage declaration is attached under:
+  - `normalized_input.pipeline.parallel_stage`
+
 ## Security Traceability Rules
 
 - If prompt-injection risk is `high`, then Gemini is blocked:
@@ -26,6 +34,8 @@ This file tracks how each orchestration step is executed, validated, and evidenc
 - If Gemini API fails:
   - `gemini_status = failed_or_empty`
   - `gemini_error` contains error reason
+- For transient API/network failures:
+  - Gemini client retries with exponential backoff before fallback
 - If Gemini succeeds:
   - `gemini_status = used`
   - `gemini_summary` is present

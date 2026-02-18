@@ -31,6 +31,14 @@ class TestSentinelOrchestration(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0, places=3)
         self.assertIn(result.final_verdict, {"PASS", "REVISE"})
 
+        pipeline = result.normalized_input.get("pipeline", {})
+        timing = pipeline.get("timing_ms", {})
+        self.assertIn("agent_01_routing", timing)
+        self.assertIn("agent_02_geopolitical", timing)
+        self.assertIn("agent_03_sentiment", timing)
+        self.assertIn("agent_07_synthesis", timing)
+        self.assertGreaterEqual(timing["agent_01_routing"], 0.0)
+
     def test_high_risk_prompt_injection_blocks_gemini(self) -> None:
         request = OrchestrationRequest(
             query=(

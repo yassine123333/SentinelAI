@@ -22,6 +22,10 @@ class TestOrchestrationScenarios(unittest.TestCase):
         result = self.orchestrator.run(request, simulation=True)
 
         self.assertEqual(result.normalized_input["asset"], "CL=F")
+        self.assertEqual(
+            result.normalized_input.get("pipeline", {}).get("parallel_stage"),
+            ["agent_02_geopolitical", "agent_03_sentiment"],
+        )
         self.assertEqual(result.reports[0].agent_name, "agent_01_routing")
         self.assertEqual(result.reports[-1].agent_name, "agent_07_synthesis")
         self.assertTrue(
@@ -46,6 +50,7 @@ class TestOrchestrationScenarios(unittest.TestCase):
         self.assertEqual(result.normalized_input["asset"], "BTC-USD")
         self.assertEqual(result.normalized_input["timeframe"], "14 days")
         self.assertEqual(result.normalized_input["risk_focus"], "volatility")
+        self.assertIn("timing_ms", result.reports[3].payload)
         self.assertIn(result.final_verdict, {"PASS", "REVISE"})
         self._assert_probabilities(result.scenario_probabilities)
 
