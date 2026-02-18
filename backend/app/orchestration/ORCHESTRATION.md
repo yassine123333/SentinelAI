@@ -246,9 +246,7 @@ Current test coverage:
 
 Traceability artifacts:
 
-- `TEST_TRACEABILITY.md`
-- `test_traceability_unittest.log`
-- `test_traceability_showcase.log`
+- `TRACEABILITY_STEPS.md`
 
 ---
 
