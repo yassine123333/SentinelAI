@@ -33,6 +33,8 @@ class TestSentinelOrchestration(unittest.TestCase):
 
         pipeline = result.normalized_input.get("pipeline", {})
         timing = pipeline.get("timing_ms", {})
+        runtime = pipeline.get("orchestration_runtime")
+        self.assertIn(runtime, {"langgraph", "sequential-fallback"})
         self.assertIn("agent_01_routing", timing)
         self.assertIn("agent_02_geopolitical", timing)
         self.assertIn("agent_03_sentiment", timing)

@@ -26,6 +26,10 @@ class TestOrchestrationScenarios(unittest.TestCase):
             result.normalized_input.get("pipeline", {}).get("parallel_stage"),
             ["agent_02_geopolitical", "agent_03_sentiment"],
         )
+        self.assertIn(
+            result.normalized_input.get("pipeline", {}).get("orchestration_runtime"),
+            {"langgraph", "sequential-fallback"},
+        )
         self.assertEqual(result.reports[0].agent_name, "agent_01_routing")
         self.assertEqual(result.reports[-1].agent_name, "agent_07_synthesis")
         self.assertTrue(

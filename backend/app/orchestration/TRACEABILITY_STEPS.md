@@ -10,7 +10,7 @@ This file tracks how each orchestration step is executed, validated, and evidenc
 | 1 | Routing (`agent_01_routing`) | Sanitized query + optional hints | `asset`, `timeframe`, `risk_focus` | Hint precedence, fallback defaults | `reports[agent_01_routing].payload` |
 | 2A | Geopolitical (`agent_02_geopolitical`) | Sanitized query | `risk_score`, `drivers` | Heuristic weighted trigger rules | `reports[agent_02_geopolitical].payload` |
 | 2B | Sentiment (`agent_03_sentiment`) | Sanitized query | `sentiment_score`, `label` | Positive/negative cue scoring | `reports[agent_03_sentiment].payload` |
-| 2P | Parallelization Control | Step 2A + Step 2B | Concurrent execution of both stages | `ThreadPoolExecutor(max_workers=2)` with deterministic report ordering | `reasoning_trace` contains parallel marker |
+| 2P | Parallelization Control (`parallel_02_03` node) | Step 2A + Step 2B | Concurrent execution of both stages | LangGraph node executes `ThreadPoolExecutor(max_workers=2)` with deterministic report ordering | `reasoning_trace` contains parallel marker |
 | 3 | Asset Analyst (`agent_04_asset_analyst`) | Routed asset + geo score + sentiment score | `implied_risk`, regime, low/mid/high move bands | Bounded risk transformation and regime mapping | `reports[agent_04_asset_analyst].payload` |
 | 4 | Critic (`agent_06_critic`) | Geo/sentiment/asset outputs | `PASS` or `REVISE` + reason | Contradiction and consistency checks | `reports[agent_06_critic].payload`, `.reasoning` |
 | 5 | Synthesis (`agent_07_synthesis`) | Pipeline outputs + security policy | Scenario probabilities + optional Gemini summary | Gemini gated by security + key status + fallback path | `reports[agent_07_synthesis].payload` |
@@ -21,6 +21,8 @@ This file tracks how each orchestration step is executed, validated, and evidenc
 - Per-stage runtime metrics are attached under:
   - `normalized_input.pipeline.timing_ms`
   - `reports[*].payload.timing_ms` (for stage payloads)
+- Orchestration runtime metadata is attached under:
+  - `normalized_input.pipeline.orchestration_runtime`
 - Parallel stage declaration is attached under:
   - `normalized_input.pipeline.parallel_stage`
 

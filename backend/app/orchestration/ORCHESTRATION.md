@@ -54,7 +54,11 @@ validate pipeline behavior before all real agents are integrated.
 
 ## 3) Pipeline Topology
 
-Current orchestration flow:
+Current orchestration flow in LangGraph:
+
+`START` → `security_gate` → `agent_01_routing` → `parallel_02_03` → `agent_04_asset_analyst` → `agent_06_critic` → `agent_07_synthesis` → `END`
+
+Agent-level progression:
 
 1. `agent_01_routing`
 2. `agent_02_geopolitical` **in parallel with** `agent_03_sentiment`
@@ -62,9 +66,15 @@ Current orchestration flow:
 4. `agent_06_critic`
 5. `agent_07_synthesis`
 
+### Runtime behavior
+
+- Orchestration topology is compiled via `langgraph.graph.StateGraph`.
+- If `langgraph` is not available in the environment, the orchestrator runs a strict node-by-node sequential fallback with identical output contracts.
+- Runtime is exposed in output under `normalized_input.pipeline.orchestration_runtime` (`langgraph` or `sequential-fallback`).
+
 ### Parallel behavior
 
-- `agent_02` and `agent_03` run concurrently via `ThreadPoolExecutor(max_workers=2)`.
+- `agent_02` and `agent_03` run concurrently inside the `parallel_02_03` node via `ThreadPoolExecutor(max_workers=2)`.
 - Report order is still deterministic (`agent_02` then `agent_03`) to avoid breaking
 	downstream consumers.
 - Trace includes: `parallel: agent_02_geopolitical and agent_03_sentiment executed concurrently`.
@@ -103,7 +113,7 @@ How routing resolves values:
 - `normalized_input`
 	- includes effective/sanitized query
 	- includes security metadata (`prompt_injection_risk`, `score`, `reasons`)
-	- includes pipeline observability (`pipeline.parallel_stage`, `pipeline.timing_ms`)
+	- includes pipeline observability (`pipeline.orchestration_runtime`, `pipeline.parallel_stage`, `pipeline.timing_ms`)
 - `reports` (per-agent `AgentReport`)
 - `reasoning_trace` (ordered operational trace)
 - `started_at`, `finished_at` (UTC ISO timestamps)
@@ -210,6 +220,18 @@ This is deterministic simulation behavior, not production forecasting.
 ## 9) How to Run
 
 From `backend/`:
+
+Install dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Or run one-command setup + tests:
+
+```bash
+./scripts/setup_orchestration.sh
+```
 
 ### A) Basic simulation (no Gemini)
 
