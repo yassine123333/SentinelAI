@@ -88,6 +88,11 @@ async def _run_pipeline_bg(
             "run_id": run_id,
             "user_id": user_id,
             "raw_query": raw_query,
+            # Hints passed to node_intake (Agent 01) so it can guide extraction
+            "asset_hint": asset_hint or None,
+            "timeframe_hint": timeframe_hint or None,
+            "risk_focus_hint": risk_focus_hint or None,
+            # These will be overwritten by node_intake with parsed values
             "asset": asset_hint or "",
             "timeframe": timeframe_hint or "",
             "risk_focus": risk_focus_hint or "",
@@ -97,7 +102,7 @@ async def _run_pipeline_bg(
             "sentiment": {},
             "asset_analyst": {},
             "critic": {},
-            "critic_attempt": 0,
+            "critic_attempt": 1,  # CriticInput.attempt requires ge=1
             "synthesis": {},
             "pdf_bytes": None,
             "status": "running",

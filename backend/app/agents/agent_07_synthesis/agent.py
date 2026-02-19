@@ -1,15 +1,12 @@
 """
 Agent 07 — Report Synthesis
-Provider : Google Gemini 2.5 Flash (Standard mode — no thinking tokens)
+Provider : Local Ollama (llama3.1:8b-instruct-q4_K_M)
 Role     : Final delivery stage of the SentinelAI pipeline.
            Receives validated outputs from Agents 02–05 and the Critic verdict,
            then assembles three deliverables:
              1. Interactive dashboard payload  — structured JSON for React frontend
-             2. Narrative report text          — 5-section prose synthesised by Gemini
+             2. Narrative report text          — 5-section prose synthesised by LLM
              3. PDF document                  — WeasyPrint HTML-to-PDF, local generation
-
-           Standard mode is chosen over Thinking mode because the task is structured
-           writing (fast, low hallucination) — not deep multi-step reasoning.
 
 Security controls:
   - Prompt injection detection on the user query free-text field
@@ -30,9 +27,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from google import genai
-from google.genai import types
 from pydantic import ValidationError
+
+from app.core.gemini_keys import OllamaConfig, generate_with_key_rotation, has_gemini_keys
 
 from .resources.schemas import (
     DashboardPayload,
@@ -97,6 +94,105 @@ def _extract_json(raw: str) -> str:
     raise ValueError(f"No JSON object found in LLM response: {raw[:200]!r}")
 
 
+def _build_fallback_narrative(
+    payload: SynthesisInput, reason: str
+) -> "_LLMNarrativeOutput":
+    """
+    Construct a valid _LLMNarrativeOutput from pipeline data when the Gemini
+    response is truncated or unparseable.  Never raises.
+    """
+    asset   = payload.asset
+    verdict = payload.critic.verdict
+    conf    = payload.critic.overall_confidence
+    geo     = payload.geopolitical
+    sent    = payload.sentiment
+    aa      = payload.asset_analyst
+    qr      = payload.quant_risk
+
+    # ── executive_summary (50–500 chars) ──────────────────────────────────────
+    exec_summary = (
+        f"{asset} analysis — verdict: {verdict} "
+        f"(confidence {conf:.0%}, {qr.risk_level} risk). "
+        f"LLM narrative unavailable; deterministic fallback applied."
+    )[:500]
+
+    # ── Padding helper ─────────────────────────────────────────────────────────
+    _PAD = "  Baseline assessment — detailed real-time data coverage was limited for this run."
+
+    def _ensure(text: str, min_len: int = 100) -> str:
+        return (text + _PAD if len(text) < min_len else text)[:1500]
+
+    # ── Narrative sections ─────────────────────────────────────────────────────
+    sentiment_label = (
+        "bullish" if sent.sentiment_score > 0.1
+        else "bearish" if sent.sentiment_score < -0.1
+        else "neutral"
+    )
+    scenarios = qr.monte_carlo_scenarios
+    bull_pct  = round(scenarios.get("bull", 0.25) * 100, 1)
+    base_pct  = round(scenarios.get("base", 0.50) * 100, 1)
+    bear_pct  = round(scenarios.get("bear", 0.25) * 100, 1)
+
+    geo_text = _ensure(
+        f"Geopolitical stability score: {geo.stability_score:.1f}/100. "
+        f"{geo.risk_summary}"
+    )
+    sent_text = _ensure(
+        f"Market sentiment is {sentiment_label} "
+        f"(score: {sent.sentiment_score:+.2f}, Fear & Greed Index: "
+        f"{sent.fear_greed_index:.0f}/100). "
+        f"Sentiment confidence: {sent.confidence:.0%}."
+    )
+    asset_text = _ensure(
+        f"{asset} shows a {aa.price_trend} trend at ${aa.current_price:.4f}. "
+        f"{aa.short_term_outlook}"
+    )
+    risk_text = _ensure(
+        f"Annualised 30-day volatility: {qr.volatility_30d:.1%}. "
+        f"95% VaR: {qr.var_95:.1%}. Risk level: {qr.risk_level}. "
+        f"GARCH forecast regime: {qr.garch_forecast.get('regime', 'N/A')}."
+    )
+    outlook_text = _ensure(
+        f"Monte Carlo scenario distribution — "
+        f"Bull: {bull_pct}%, Base: {base_pct}%, Bear: {bear_pct}%. "
+        f"Critic verdict: {verdict} with {conf:.0%} overall confidence."
+    )
+
+    # ── key_risks (≥ 1 item) ──────────────────────────────────────────────────
+    patterns: list[str] = [
+        p for p in aa.key_patterns
+        if p and p != "N/A" and "Baseline" not in p and "Pipeline error" not in p
+    ]
+    key_risks: list[str] = patterns[:5] if patterns else []
+    if qr.var_95 > 0.05:
+        key_risks.append(f"High VaR: {qr.var_95:.1%} at 95% confidence")
+    if geo.stability_score < 40:
+        key_risks.append("Low geopolitical stability — elevated macro risk")
+    if not key_risks:
+        key_risks = [f"Elevated {qr.risk_level} risk for {asset}"]
+
+    # ── reasoning_trace (≥ 100 chars) ─────────────────────────────────────────
+    reasoning = (
+        f"Fallback synthesis activated. Gemini LLM parse failed: {reason[:150]}. "
+        f"Asset: {asset}. Verdict: {verdict}. Confidence: {conf:.2f}. "
+        f"Risk level: {qr.risk_level}. Annualised vol: {qr.volatility_30d:.1%}."
+    )
+
+    return _LLMNarrativeOutput(
+        executive_summary=exec_summary,
+        narrative_sections=NarrativeSections(
+            geopolitical_context=geo_text,
+            market_sentiment=sent_text,
+            asset_analysis=asset_text,
+            risk_assessment=risk_text,
+            scenario_outlook=outlook_text,
+        ),
+        key_risks=key_risks[:8],
+        key_opportunities=[],
+        reasoning_trace=reasoning,
+    )
+
+
 # ── SynthesisAgent ─────────────────────────────────────────────────────────────
 
 class SynthesisAgent:
@@ -123,16 +219,11 @@ class SynthesisAgent:
     """
 
     agent_id   = "agent_07"
-    model_name = "gemini-2.5-flash"
+    model_name = "ollama/llama3.1:8b-instruct-q4_K_M"
 
     def __init__(self) -> None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Add it to backend/.env or export it before running."
-            )
-        self._client = genai.Client(api_key=api_key)
+        if not has_gemini_keys():
+            raise RuntimeError("LLM client is not available.")
         # Token-bucket rate limiter state
         self._tokens: float = float(_RATE_LIMIT_CALLS)
         self._last_refill: float = time.monotonic()
@@ -246,35 +337,42 @@ class SynthesisAgent:
         # ── Step 6: Gemini 2.5 Flash — Standard mode ─────────────────────────
         # Standard mode = no thinking_config.
         # temperature=0.3 allows natural prose while staying grounded.
-        response = await self._client.aio.models.generate_content(
+        response = await generate_with_key_rotation(
             model=self.model_name,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
+            config=OllamaConfig(
                 system_instruction=_SYSTEM_PROMPT,
                 response_mime_type="application/json",
                 temperature=0.3,
                 top_p=0.95,
-                max_output_tokens=4096,
+                max_output_tokens=8192,
             ),
         )
 
         raw_text = response.text
 
         # ── Step 7: Parse and validate LLM output ─────────────────────────────
+        llm_out: _LLMNarrativeOutput
         try:
             json_str = _extract_json(raw_text)
             llm_out  = _LLMNarrativeOutput.model_validate(json.loads(json_str))
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            # Gemini response was truncated or invalid JSON — use deterministic fallback
+            # so the pipeline always produces a synthesis output rather than failing.
+            reason = f"{type(exc).__name__}: {exc}"
             self._audit(
                 "synthesis_parse_error",
                 query_id=payload.query_id,
                 fingerprint=fp,
-                error=str(exc),
+                error=reason,
+                raw_snippet=raw_text[:200],
+                fallback="deterministic",
             )
-            raise RuntimeError(
-                f"Agent 07 failed to parse/validate LLM output: {exc}\n"
-                f"Raw response snippet: {raw_text[:300]!r}"
-            ) from exc
+            logger.warning(
+                "Agent 07 LLM parse failed (%s) — using deterministic fallback for %s",
+                reason, payload.query_id,
+            )
+            llm_out = _build_fallback_narrative(payload, reason)
 
         # ── Step 8: Reconcile locked values (hallucination guard) ─────────────
         # Dashboard is deterministic — LLM cannot change these.

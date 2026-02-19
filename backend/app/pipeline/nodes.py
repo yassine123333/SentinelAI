@@ -342,7 +342,7 @@ async def node_critic(state: PipelineState) -> dict[str, Any]:
     )
 
     trace = list(state.get("reasoning_trace", []))
-    attempt = state.get("critic_attempt", 1)
+    attempt = max(1, state.get("critic_attempt", 1))  # guard: CriticInput requires ge=1
     trace.append(f"[{_now()}] agent_06_critic: start attempt={attempt}")
 
     try:

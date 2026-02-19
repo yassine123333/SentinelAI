@@ -1,6 +1,6 @@
 """
 Agent 06 — Critic & Verifier
-Provider : Google Gemini 2.5 Flash
+Provider : Local Ollama (llama3.1:8b-instruct-q4_K_M)
 Role     : Autonomous quality gate that validates pipeline outputs from
            Agents 02–05 across five dimensions:
              1. Source attribution
@@ -30,9 +30,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from google import genai
-from google.genai import types
 from pydantic import ValidationError
+
+from app.core.gemini_keys import OllamaConfig, generate_with_key_rotation, has_gemini_keys
 
 from .schemas import CriticInput, CriticOutput
 from .tools.confidence_scorer import get_confidence_breakdown
@@ -110,16 +110,11 @@ class CriticAgent:
     """
 
     agent_id   = "agent_06"
-    model_name = "gemini-2.5-flash"
+    model_name = "ollama/llama3.1:8b-instruct-q4_K_M"
 
     def __init__(self) -> None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Add it to backend/.env or export it before running."
-            )
-        self._client = genai.Client(api_key=api_key)
+        if not has_gemini_keys():
+            raise RuntimeError("LLM client is not available.")
         # Token-bucket rate limiter state
         self._tokens: float = float(_RATE_LIMIT_CALLS)
         self._last_refill: float = time.monotonic()
@@ -230,14 +225,14 @@ class CriticAgent:
         # A verification agent must be greedy/deterministic. Any temperature above 0
         # introduces randomness that can cause the model to deviate from the locked
         # values or fabricate evidence.
-        response = await self._client.aio.models.generate_content(
+        response = await generate_with_key_rotation(
             model=self.model_name,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
+            config=OllamaConfig(
                 system_instruction=_SYSTEM_PROMPT,
                 response_mime_type="application/json",
                 temperature=0.0,        # greedy — no hallucination slack
-                top_p=1.0,              # keep full vocabulary but force greedy
+                top_p=1.0,
                 max_output_tokens=8192,
             ),
         )

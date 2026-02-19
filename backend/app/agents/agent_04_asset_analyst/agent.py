@@ -25,7 +25,7 @@ import logging
 import os
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .prompts.analyst_prompt import SYSTEM_PROMPT, build_user_prompt
@@ -46,26 +46,17 @@ logger = logging.getLogger(__name__)
 # LLM configuration
 # ---------------------------------------------------------------------------
 
-_GEMINI_MODEL = "gemini-2.5-flash"
 
-# Thinking budget: number of tokens the model may use for internal reasoning
-# before writing the final answer.  Higher = better synthesis, higher latency.
-# 8 192 is a good balance for this use-case.
-_THINKING_BUDGET = 8_192
-
-
-def _get_llm() -> ChatGoogleGenerativeAI:
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError(
-            "GOOGLE_API_KEY or GEMINI_API_KEY must be set to use Agent 04."
-        )
-    return ChatGoogleGenerativeAI(
-        model=_GEMINI_MODEL,
-        google_api_key=api_key,
-        temperature=1.0,           # required for thinking mode
-        thinking_budget=_THINKING_BUDGET,
-        request_timeout=60,        # fail fast if Gemini hangs; don't block the DAG
+def _get_llm() -> ChatOllama:
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    model = os.environ.get("OLLAMA_MODEL", "llama3.1:8b-instruct-q4_K_M")
+    return ChatOllama(
+        model=model,
+        base_url=base_url,
+        temperature=0,
+        format="json",
+        num_predict=4096,
+        request_timeout=120,
     )
 
 
@@ -155,7 +146,7 @@ def agent_04_node(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     # --- LLM synthesis ---------------------------------------------------
-    logger.info("Agent 04 [LLM] — calling Gemini 2.5 Flash thinking mode")
+    logger.info("Agent 04 [LLM] — calling local Ollama model")
     interpretation = _run_llm_synthesis(
         agent_input=agent_input,
         data_result=data_result,

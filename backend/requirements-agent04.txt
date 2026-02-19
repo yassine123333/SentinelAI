@@ -21,8 +21,8 @@ arch>=6.3.0
 numpy>=1.26.0
 pandas>=2.2.0
 
-# LLM — Gemini 2.5 Flash
-langchain-google-genai>=1.0.10
+# LLM — Local Ollama
+langchain-ollama>=0.2.0
 langchain-core>=0.2.0
 
 # Pydantic (shared with FastAPI)

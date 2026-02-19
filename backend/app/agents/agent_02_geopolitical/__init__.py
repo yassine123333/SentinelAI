@@ -94,18 +94,15 @@ async def _try_real_agent(asset: str, query: str, timeframe: str) -> dict[str, A
 
 async def _gemini_fallback(asset: str, query: str, timeframe: str) -> dict[str, Any]:
     """
-    Gemini 2.5 Flash closed-book fallback for geopolitical analysis.
+    Local LLM closed-book fallback for geopolitical analysis.
     Only uses the structured query — no external data injected.
     """
-    from google import genai
-    from google.genai import types as gtypes
+    from app.core.gemini_keys import OllamaConfig, generate_with_key_rotation, has_gemini_keys
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("agent_02 fallback: GEMINI_API_KEY not set, returning minimal baseline")
+    if not has_gemini_keys():
+        logger.warning("agent_02 fallback: LLM not available, returning minimal baseline")
         return _minimal_baseline(asset)
 
-    client = genai.Client(api_key=api_key)
     system = (
         "You are a geopolitical risk analyst. "
         "Respond ONLY with a JSON object. Do not add prose outside the JSON. "
@@ -128,10 +125,10 @@ async def _gemini_fallback(asset: str, query: str, timeframe: str) -> dict[str, 
     )
 
     try:
-        resp = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+        resp = await generate_with_key_rotation(
+            model="",
             contents=user,
-            config=gtypes.GenerateContentConfig(
+            config=OllamaConfig(
                 system_instruction=system,
                 response_mime_type="application/json",
                 temperature=0.1,
@@ -148,7 +145,7 @@ async def _gemini_fallback(asset: str, query: str, timeframe: str) -> dict[str, 
         data["risk_summary"] = str(data.get("risk_summary", ""))[:2000]
         return data
     except Exception as exc:
-        logger.warning("agent_02 Gemini fallback failed: %s", exc)
+        logger.warning("agent_02 local LLM fallback failed: %s", exc)
         return _minimal_baseline(asset)
 
 

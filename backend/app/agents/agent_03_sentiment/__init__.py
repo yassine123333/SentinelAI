@@ -123,15 +123,12 @@ async def _gemini_fallback(
     keywords: list[str],
     time_window_days: int,
 ) -> dict[str, Any]:
-    from google import genai
-    from google.genai import types as gtypes
+    from app.core.gemini_keys import OllamaConfig, generate_with_key_rotation, has_gemini_keys
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("agent_03 fallback: GEMINI_API_KEY not set, returning minimal baseline")
+    if not has_gemini_keys():
+        logger.warning("agent_03 fallback: LLM not available, returning minimal baseline")
         return _minimal_baseline(asset)
 
-    client = genai.Client(api_key=api_key)
     kw_str = ", ".join(keywords[:8])
 
     system = (
@@ -155,10 +152,10 @@ async def _gemini_fallback(
     )
 
     try:
-        resp = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+        resp = await generate_with_key_rotation(
+            model="",
             contents=user,
-            config=gtypes.GenerateContentConfig(
+            config=OllamaConfig(
                 system_instruction=system,
                 response_mime_type="application/json",
                 temperature=0.1,
@@ -175,7 +172,7 @@ async def _gemini_fallback(
         data["sources"] = data.get("sources", ["GDELT", "Reddit"])
         return data
     except Exception as exc:
-        logger.warning("agent_03 Gemini fallback failed: %s", exc)
+        logger.warning("agent_03 local LLM fallback failed: %s", exc)
         return _minimal_baseline(asset)
 
 
