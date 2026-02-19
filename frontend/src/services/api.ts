@@ -23,6 +23,13 @@ import type {
   User,
   VerifyEmailResponse,
 } from '@/types/auth'
+import type {
+  PipelineReport,
+  PipelineStatus,
+  QueryRequest,
+  QueryResponse,
+  UserRunItem,
+} from '@/types/pipeline'
 
 const BASE_URL = '/api/v1'
 
@@ -205,6 +212,42 @@ export const authApi = {
    */
   changePassword: (data: ChangePasswordRequest) =>
     api.post<{ message: string }>('/auth/me/change-password', data),
+}
+
+// ── Pipeline endpoints ────────────────────────────────────────────────────────
+
+export const pipelineApi = {
+  /**
+   * Submit a new analysis query. Returns run_id immediately (202 Accepted).
+   * The pipeline executes asynchronously — poll getStatus() for progress.
+   */
+  submit: (body: QueryRequest) =>
+    api.post<QueryResponse>('/query', body),
+
+  /**
+   * Lightweight poll: returns run status without the full report payload.
+   */
+  getStatus: (runId: string) =>
+    api.get<PipelineStatus>(`/pipeline/${runId}/status`),
+
+  /**
+   * Fetch the completed report. Returns 202 if still in progress.
+   */
+  getReport: (runId: string) =>
+    api.get<PipelineReport>(`/report/${runId}`),
+
+  /**
+   * Download PDF bytes for a completed run.
+   * Returns the raw ArrayBuffer so the caller can build a Blob URL.
+   */
+  downloadPdf: (runId: string) =>
+    api.get<ArrayBuffer>(`/report/${runId}/pdf`, { responseType: 'arraybuffer' }),
+
+  /**
+   * List the authenticated user's recent pipeline runs (newest first).
+   */
+  getHistory: (limit = 20, skip = 0) =>
+    api.get<UserRunItem[]>('/history', { params: { limit, skip } }),
 }
 
 export default api

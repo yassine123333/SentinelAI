@@ -105,6 +105,58 @@ async def init() -> None:
         else:
             print(f"  [refresh_tokens] Index already exists: {name}")
 
+    # ── pipeline_runs collection ──────────────────────────────────────────────
+    runs = db["pipeline_runs"]
+
+    runs_indexes = [
+        # Primary lookup by run_id (unique — used in ownership check)
+        IndexModel([("run_id", ASCENDING)], unique=True, name="run_id_unique"),
+        # All runs for a user, newest first
+        IndexModel(
+            [("user_id", ASCENDING), ("created_at", ASCENDING)],
+            name="user_runs_by_date",
+        ),
+        # Status filter for admin dashboard
+        IndexModel([("status", ASCENDING)], name="status_asc"),
+        # Ownership enforcement compound index: run_id + user_id
+        IndexModel(
+            [("run_id", ASCENDING), ("user_id", ASCENDING)],
+            name="run_ownership",
+        ),
+    ]
+
+    existing_r = await runs.index_information()
+    for idx in runs_indexes:
+        name = idx.document.get("name")  # type: ignore[attr-defined]
+        if name not in existing_r:
+            await runs.create_indexes([idx])
+            print(f"  [pipeline_runs] Created index: {name}")
+        else:
+            print(f"  [pipeline_runs] Index already exists: {name}")
+
+    # ── pipeline_pdfs collection ──────────────────────────────────────────────
+    pdfs = db["pipeline_pdfs"]
+
+    pdfs_indexes = [
+        # Unique run_id for upsert-safe PDF storage
+        IndexModel([("run_id", ASCENDING)], unique=True, name="pdf_run_id_unique"),
+        # TTL: auto-delete PDFs after 30 days (2_592_000 seconds)
+        IndexModel(
+            [("stored_at", ASCENDING)],
+            expireAfterSeconds=2_592_000,
+            name="pdf_ttl_30d",
+        ),
+    ]
+
+    existing_p = await pdfs.index_information()
+    for idx in pdfs_indexes:
+        name = idx.document.get("name")  # type: ignore[attr-defined]
+        if name not in existing_p:
+            await pdfs.create_indexes([idx])
+            print(f"  [pipeline_pdfs] Created index: {name}")
+        else:
+            print(f"  [pipeline_pdfs] Index already exists: {name}")
+
     # ── Validator schema (schema validation in MongoDB) ───────────────────────
     await db.command(
         "collMod",
@@ -133,7 +185,7 @@ async def init() -> None:
     print("\nMigration complete. Open MongoDB Compass and connect to:")
     print(f"  {settings.mongodb_uri}")
     print(f"  Database: {settings.mongodb_db}")
-    print("  Collections: users, refresh_tokens")
+    print("  Collections: users, refresh_tokens, pipeline_runs, pipeline_pdfs")
 
 
 if __name__ == "__main__":

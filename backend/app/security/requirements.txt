@@ -1,0 +1,13 @@
+# SOC Multi-Agent Security System — Python dependencies
+# Install with: pip install -r requirements.txt
+
+langgraph>=0.2.0
+langchain-core>=0.2.0
+groq>=0.9.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Optional: Azure NSG blocking (only needed if BLOCK_LAYER_AZURE=true)
+# pip install azure-identity azure-mgmt-network
+# azure-identity>=1.15.0
+# azure-mgmt-network>=25.0.0

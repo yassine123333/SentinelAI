@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+
+# Generated files
+blocklist.conf
+test_blocker.log
+test_access.log
+fake_access.log
