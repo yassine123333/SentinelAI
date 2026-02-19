@@ -3,7 +3,7 @@
 import os
 
 # ─── API Keys ───────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBkJnUohjx3N1TGV9xFQZ6FKvGksocfmUk")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # ─── Defaults ───────────────────────────────────────────────
 DEFAULT_TIME_WINDOW_DAYS = 2
