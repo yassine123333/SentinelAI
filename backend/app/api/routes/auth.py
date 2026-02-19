@@ -31,13 +31,17 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.api.deps import get_current_user, get_refresh_token_from_cookie
+from app.config.settings import get_settings
 from app.db.mongodb import get_db
 from app.models.user import (
+    ChangePasswordRequest,
     ResendVerificationRequest,
+    UpdateProfileRequest,
     UserLogin,
     UserRegister,
     UserResponse,
@@ -57,13 +61,16 @@ _COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
-    """Attach the refresh token as an HttpOnly, Secure, SameSite=Strict cookie."""
+    """Attach the refresh token as an HttpOnly cookie.
+    secure=True in production (HTTPS); false in local dev (HTTP) via COOKIE_SECURE env var.
+    """
+    settings = get_settings()
     response.set_cookie(
         key="refresh_token",
         value=token,
         httponly=True,
-        secure=True,          # HTTPS only — matches presentation TLS 1.3 requirement
-        samesite="strict",    # CSRF protection — matches presentation spec
+        secure=settings.cookie_secure,
+        samesite="lax",       # lax allows cookie on same-origin redirects (dev-friendly)
         max_age=_COOKIE_MAX_AGE,
         path=_COOKIE_PATH,
     )
@@ -71,6 +78,62 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 
 def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key="refresh_token", path=_COOKIE_PATH)
+
+
+# ── Cloudflare Turnstile verification ─────────────────────────────────────────
+
+_TURNSTILE_SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+async def _verify_turnstile(request: Request) -> None:
+    """
+    Validate the Cloudflare Turnstile token sent by the frontend as
+    the X-CF-Turnstile header.
+
+    - If TURNSTILE_SECRET_KEY is not configured (e.g. during initial dev
+      setup before .env is populated), the check is skipped so developers
+      are not blocked. A warning is logged so the gap is visible.
+    - Any token that Cloudflare rejects results in HTTP 403 — the login
+      attempt is refused before credentials are even checked, burning the
+      attacker's challenge token with zero information returned.
+    """
+    settings = get_settings()
+    if not settings.turnstile_secret_key:
+        logger.warning("TURNSTILE_SECRET_KEY is not set — Turnstile check skipped")
+        return
+
+    token = request.headers.get("X-CF-Turnstile", "")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Security challenge required.",
+        )
+
+    client_ip = request.client.host if request.client else None
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.post(
+                _TURNSTILE_SITEVERIFY,
+                data={
+                    "secret":   settings.turnstile_secret_key,
+                    "response": token,
+                    **({"remoteip": client_ip} if client_ip else {}),
+                },
+            )
+            result = resp.json()
+        except httpx.RequestError:
+            # Cloudflare unreachable — fail open to avoid locking out real users
+            logger.error("Turnstile siteverify request failed — failing open")
+            return
+
+    if not result.get("success"):
+        error_codes = result.get("error-codes", [])
+        logger.warning("Turnstile verification failed: %s", error_codes)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Security challenge failed. Please try again.",
+        )
 
 
 # ── POST /register ────────────────────────────────────────────────────────────
@@ -106,6 +169,7 @@ async def register(
 @router.post(
     "/login",
     summary="Authenticate and receive access + refresh tokens",
+    dependencies=[Depends(_verify_turnstile)],
 )
 async def login(
     request: Request,
@@ -277,3 +341,52 @@ async def me(
 
     user["_id"] = str(user["_id"])
     return UserResponse(**user)
+
+
+# ── PATCH /me ─────────────────────────────────────────────────────────────────
+
+@router.patch(
+    "/me",
+    summary="Update the current user's profile",
+)
+async def update_me(
+    request: Request,
+    body: UpdateProfileRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Partially update the authenticated user's profile.
+
+    Accepts any combination of: fullname, avatar_id (1-8), ticker_preferences.
+    Returns the updated user object. Only supplied fields are written.
+    """
+    try:
+        return await auth_service.update_profile(db, current_user["user_id"], body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+# ── POST /me/change-password ──────────────────────────────────────────────────
+
+@router.post(
+    "/me/change-password",
+    summary="Change the authenticated user's password",
+)
+async def change_password_me(
+    request: Request,
+    body: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Replace the current user's password after verifying the existing one.
+
+    - current_password must match the stored bcrypt hash.
+    - new_password must satisfy the same strength rules as registration.
+    - Returns HTTP 200 on success.
+    """
+    try:
+        return await auth_service.change_password(db, current_user["user_id"], body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

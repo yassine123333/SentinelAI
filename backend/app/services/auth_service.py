@@ -23,7 +23,13 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.config.settings import get_settings
-from app.models.user import UserInDB, UserLogin, UserRegister
+from app.models.user import (
+    ChangePasswordRequest,
+    UpdateProfileRequest,
+    UserInDB,
+    UserLogin,
+    UserRegister,
+)
 from app.security.email import send_verification_email
 from app.security.jwt import create_access_token, create_refresh_token
 from app.security.password import hash_password, verify_password
@@ -293,7 +299,10 @@ async def refresh_access_token(
     settings = get_settings()
     now = _now()
 
-    token_doc = await db["refresh_tokens"].find_one(
+    # Atomic find-and-delete: ensures only ONE concurrent request can consume a JTI.
+    # Prevents race conditions (e.g. React StrictMode double-mount sending two
+    # simultaneous /refresh requests with the same cookie).
+    token_doc = await db["refresh_tokens"].find_one_and_delete(
         {"jti": jti, "user_id": user_id, "expires_at": {"$gt": now}}
     )
     if not token_doc:
@@ -305,9 +314,6 @@ async def refresh_access_token(
     )
     if not user or not user.get("is_verified"):
         raise ValueError("User account is not active.")
-
-    # Rotate: delete old jti, create new refresh token
-    await db["refresh_tokens"].delete_one({"jti": jti})
 
     new_access = create_access_token(
         user_id=user_id,
@@ -334,6 +340,83 @@ async def refresh_access_token(
         "expires_in":    settings.access_token_expire_minutes * 60,
         "refresh_token": new_refresh,
     }
+
+
+# ── Profile update ────────────────────────────────────────────────────────────
+
+async def update_profile(
+    db: AsyncIOMotorDatabase, user_id: str, data: UpdateProfileRequest
+) -> dict:
+    """
+    Partially update a user's profile (fullname, avatar_id, ticker_preferences).
+    Only fields explicitly supplied in the request body are written.
+    Returns the updated user dict (same shape as the login user payload).
+    Raises ValueError if nothing to update or user not found.
+    """
+    updates: dict = {}
+    if data.fullname is not None:
+        updates["fullname"] = data.fullname
+    if data.avatar_id is not None:
+        updates["avatar_id"] = data.avatar_id
+    if data.ticker_preferences is not None:
+        updates["ticker_preferences"] = data.ticker_preferences
+
+    if not updates:
+        raise ValueError("No fields to update.")
+
+    updates["updated_at"] = _now()
+
+    result = await db["users"].update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": updates},
+    )
+    if result.matched_count == 0:
+        raise ValueError("User not found.")
+
+    user = await db["users"].find_one({"_id": ObjectId(user_id)})
+    logger.info("profile_update user_id=%s fields=%s", user_id, list(updates.keys()))
+
+    return {
+        "_id":                str(user["_id"]),
+        "fullname":           user["fullname"],
+        "email":              user["email"],
+        "role":               user.get("role", "analyst"),
+        "is_verified":        user["is_verified"],
+        "ticker_preferences": user.get("ticker_preferences", []),
+        "avatar_id":          user.get("avatar_id"),
+        "created_at":         user["created_at"],
+        "last_login":         user.get("last_login"),
+    }
+
+
+# ── Password change ────────────────────────────────────────────────────────────
+
+async def change_password(
+    db: AsyncIOMotorDatabase, user_id: str, data: ChangePasswordRequest
+) -> dict:
+    """
+    Validate the current password and replace it with the new one.
+    Raises ValueError if the current password is wrong.
+    """
+    user = await db["users"].find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise ValueError("User account not found.")
+
+    if not verify_password(data.current_password, user["hashed_password"]):
+        raise ValueError("Current password is incorrect.")
+
+    await db["users"].update_one(
+        {"_id": ObjectId(user_id)},
+        {
+            "$set": {
+                "hashed_password": hash_password(data.new_password),
+                "updated_at": _now(),
+            }
+        },
+    )
+
+    logger.info("password_changed user_id=%s", user_id)
+    return {"message": "Password updated successfully."}
 
 
 # ── Logout ────────────────────────────────────────────────────────────────────

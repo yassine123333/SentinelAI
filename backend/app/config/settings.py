@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     brevo_sender_email: str = "skyrexcgaming@gmail.com"
     brevo_sender_name: str = "SentinelAI"
 
+    # ── reCAPTCHA ─────────────────────────────────────────────────────────────
+    recaptcha_secret_key: str = ""
+
+    # ── Cloudflare Turnstile ──────────────────────────────────────────────────
+    turnstile_secret_key: str = ""
+
+    # ── Cookie security ───────────────────────────────────────────────────────
+    # Set to false in local dev (HTTP). Must be true in production (HTTPS).
+    cookie_secure: bool = True
+
     # ── AI ────────────────────────────────────────────────────────────────────
     gemini_api_key: str = ""
 

@@ -149,6 +149,66 @@ class UpdateTickerPreferences(BaseModel):
         return result
 
 
+class UpdateProfileRequest(BaseModel):
+    """
+    PATCH /auth/me — partial profile update.
+    All fields are optional; only supplied fields are written to the DB.
+    """
+    fullname: str | None = Field(None, min_length=2, max_length=100)
+    avatar_id: int | None = Field(None, ge=1, le=8, description="Avatar index 1-8")
+    ticker_preferences: list[str] | None = Field(None, max_length=MAX_TICKERS)
+
+    @field_validator("fullname")
+    @classmethod
+    def validate_fullname(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not _FULLNAME_RE.match(v):
+            raise ValueError(
+                "Full name may only contain letters, spaces, hyphens, apostrophes, or dots."
+            )
+        return _no_injection(v)
+
+    @field_validator("ticker_preferences", mode="before")
+    @classmethod
+    def validate_tickers(cls, v: Any) -> list[str] | None:
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("ticker_preferences must be a list.")
+        result: list[str] = []
+        for raw in v:
+            ticker = str(raw).strip().upper()
+            if not _TICKER_RE.match(ticker):
+                raise ValueError(f"Invalid ticker '{raw}'.")
+            result.append(ticker)
+        return result
+
+
+class ChangePasswordRequest(BaseModel):
+    """POST /auth/me/change-password — update the user's own password."""
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password_strength(cls, v: str) -> str:
+        if not _PASSWORD_RE.match(v):
+            raise ValueError(
+                "New password must be at least 8 characters and include an uppercase letter, "
+                "a lowercase letter, a digit, and a special character."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "ChangePasswordRequest":
+        if self.new_password != self.confirm_new_password:
+            raise ValueError("Passwords do not match.")
+        return self
+
+
 # ── Response schemas ──────────────────────────────────────────────────────────
 
 class UserResponse(BaseModel):
@@ -162,7 +222,9 @@ class UserResponse(BaseModel):
     role: Literal["analyst", "admin"]
     is_verified: bool
     ticker_preferences: list[str]
+    avatar_id: int | None = None
     created_at: datetime
+    last_login: datetime | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -188,6 +250,7 @@ class UserInDB(BaseModel):
     role: Literal["analyst", "admin"] = "analyst"
     is_verified: bool = False
     ticker_preferences: list[str] = Field(default_factory=list)
+    avatar_id: int | None = None
 
     # Email verification
     email_verification_token: str | None = None   # SHA-256 hex of the raw token
