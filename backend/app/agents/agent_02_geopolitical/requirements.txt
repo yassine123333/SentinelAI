@@ -1,0 +1,63 @@
+# ============================================================
+# GeoKG-RAG Intelligence System - Full Requirements
+# ============================================================
+
+# --- Core ---
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+httpx>=0.26.0
+asyncio-mqtt>=0.16.0
+
+# --- Knowledge Graph ---
+neo4j>=5.15.0
+
+# --- Vector Database ---
+weaviate-client>=4.4.0
+
+# --- LLM & Embeddings: Google Gemini 2.5 Flash (NEW SDK) ---
+google-genai>=1.0.0           # NEW official SDK (replaces deprecated google-generativeai)
+# anthropic>=0.23.0           # Optional fallback — not required
+# openai>=1.12.0              # NOT used — replaced by Gemini
+
+# --- Agent Framework ---
+langgraph>=0.0.55
+langchain>=0.1.12
+langchain-community>=0.0.28
+langchain-openai>=0.0.8
+
+# --- NLP & Extraction ---
+gliner>=0.1.10
+spacy>=3.7.4
+# Run after install: python -m spacy download en_core_web_trf
+# coreferee>=1.4.0  # install separately: pip install coreferee && python -m coreferee install en
+
+# --- Link Prediction (GNN) ---
+pykeen>=1.10.2
+torch>=2.2.0
+numpy>=1.26.0
+
+# --- Graph Analysis ---
+networkx>=3.2.1
+
+# --- Streaming & Orchestration ---
+kafka-python>=2.0.2
+# apache-airflow>=2.8.0  # install separately in airflow venv
+
+# --- API Layer ---
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.9
+
+# --- Data Processing ---
+pandas>=2.2.0
+lxml>=5.1.0        # UN XML parsing
+datasets>=2.18.0
+
+# --- Monitoring ---
+prometheus-client>=0.20.0
+
+# --- Utilities ---
+tenacity>=8.2.3    # retry logic
+structlog>=24.1.0  # structured logging
+rich>=13.7.0       # CLI output
+typer>=0.9.0       # CLI
