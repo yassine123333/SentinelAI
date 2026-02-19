@@ -34,6 +34,8 @@ import logging
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.api.deps import get_current_user, get_refresh_token_from_cookie
 from app.config.settings import get_settings
@@ -53,6 +55,8 @@ from app.services import auth_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+limiter = Limiter(key_func=get_remote_address)
 
 # ── Cookie helpers ────────────────────────────────────────────────────────────
 
@@ -143,6 +147,7 @@ async def _verify_turnstile(request: Request) -> None:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
 )
+@limiter.limit("5/minute")
 async def register(
     request: Request,
     body: UserRegister,
@@ -171,6 +176,7 @@ async def register(
     summary="Authenticate and receive access + refresh tokens",
     dependencies=[Depends(_verify_turnstile)],
 )
+@limiter.limit("10/minute")
 async def login(
     request: Request,
     body: UserLogin,
@@ -203,6 +209,7 @@ async def login(
     "/verify-email",
     summary="Confirm email address using the verification token",
 )
+@limiter.limit("10/minute")
 async def verify_email(
     request: Request,
     body: VerifyEmailRequest,
@@ -226,6 +233,7 @@ async def verify_email(
     "/resend-verification",
     summary="Re-send the email verification link",
 )
+@limiter.limit("3/minute")
 async def resend_verification(
     request: Request,
     body: ResendVerificationRequest,
@@ -246,6 +254,7 @@ async def resend_verification(
     "/refresh",
     summary="Rotate access token using the HttpOnly refresh-token cookie",
 )
+@limiter.limit("20/minute")
 async def refresh(
     request: Request,
     response: Response,
@@ -286,6 +295,7 @@ async def refresh(
     "/logout",
     summary="Revoke the refresh token and clear the cookie",
 )
+@limiter.limit("20/minute")
 async def logout(
     request: Request,
     response: Response,
@@ -320,6 +330,7 @@ async def logout(
     response_model=UserResponse,
     summary="Return the current user's profile",
 )
+@limiter.limit("60/minute")
 async def me(
     request: Request,
     current_user: dict = Depends(get_current_user),
@@ -349,6 +360,7 @@ async def me(
     "/me",
     summary="Update the current user's profile",
 )
+@limiter.limit("60/minute")
 async def update_me(
     request: Request,
     body: UpdateProfileRequest,
@@ -373,6 +385,7 @@ async def update_me(
     "/me/change-password",
     summary="Change the authenticated user's password",
 )
+@limiter.limit("5/minute")
 async def change_password_me(
     request: Request,
     body: ChangePasswordRequest,

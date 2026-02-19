@@ -29,6 +29,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.pipeline import router as pipeline_router
+from app.api.routes.admin import router as admin_router
 from app.config.settings import get_settings
 from app.db.mongodb import close_db, connect_db
 
@@ -58,11 +60,12 @@ logging.config.dictConfig(
 logger = logging.getLogger(__name__)
 
 # ── Rate limiter (global, IP-based) ──────────────────────────────────────────
+# No default_limits here — each route declares its own limit.
+# A catch-all default would share a single bucket across ALL endpoints
+# (login, register, pipeline query …), causing legitimate requests to be
+# blocked after only a handful of auth calls.
 
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["10/minute"],   # per presentation: 10 req/min per IP
-)
+limiter = Limiter(key_func=get_remote_address)
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -146,6 +149,18 @@ app.include_router(
     auth_router,
     prefix="/api/v1/auth",
     tags=["Authentication"],
+)
+
+app.include_router(
+    pipeline_router,
+    prefix="/api/v1",
+    tags=["Pipeline"],
+)
+
+app.include_router(
+    admin_router,
+    prefix="/api/v1/admin",
+    tags=["Admin"],
 )
 
 
