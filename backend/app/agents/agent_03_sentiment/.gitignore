@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+qdrant_data/
+rag_store.db
+.env
+*.egg-info/
+dist/
+build/
