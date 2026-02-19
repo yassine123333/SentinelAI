@@ -6,9 +6,19 @@ from .orchestrator import SentinelOrchestrator
 from .types import OrchestrationRequest
 
 
+AGENT_ROUTING = "agent_01_routing"
+AGENT_ASSET = "agent_04_asset_analyst"
+AGENT_SYNTHESIS = "agent_06_report_synthesis"
+
+
 class TestOrchestrationScenarios(unittest.TestCase):
     def setUp(self) -> None:
         self.orchestrator = SentinelOrchestrator()
+
+    def _report_by_name(self, result, agent_name: str):
+        matches = [report for report in result.reports if report.agent_name == agent_name]
+        self.assertEqual(len(matches), 1, f"Expected exactly one report for {agent_name}")
+        return matches[0]
 
     def test_reference_brent_macro_scenario(self) -> None:
         request = OrchestrationRequest(
@@ -34,8 +44,8 @@ class TestOrchestrationScenarios(unittest.TestCase):
             result.normalized_input.get("pipeline", {}).get("gemini_key_source"),
             {"vault", "env", "missing"},
         )
-        self.assertEqual(result.reports[0].agent_name, "agent_01_routing")
-        self.assertEqual(result.reports[-1].agent_name, "agent_06_report_synthesis")
+        self.assertEqual(result.reports[0].agent_name, AGENT_ROUTING)
+        self.assertEqual(result.reports[-1].agent_name, AGENT_SYNTHESIS)
         self.assertTrue(
             any(
                 "parallel: agent_02_geopolitical and agent_03_sentiment executed concurrently" in line
@@ -58,7 +68,7 @@ class TestOrchestrationScenarios(unittest.TestCase):
         self.assertEqual(result.normalized_input["asset"], "BTC-USD")
         self.assertEqual(result.normalized_input["timeframe"], "14 days")
         self.assertEqual(result.normalized_input["risk_focus"], "volatility")
-        self.assertIn("timing_ms", result.reports[3].payload)
+        self.assertIn("timing_ms", self._report_by_name(result, AGENT_ASSET).payload)
         self.assertIn(result.final_verdict, {"PASS", "REVISE"})
         self._assert_probabilities(result.scenario_probabilities)
 
@@ -71,7 +81,10 @@ class TestOrchestrationScenarios(unittest.TestCase):
         result = self.orchestrator.run(request, simulation=True)
 
         self.assertEqual(result.normalized_input["asset"], "^GSPC")
-        self.assertIn(result.reports[3].payload["volatility_regime"], {"low", "medium", "high"})
+        self.assertIn(
+            self._report_by_name(result, AGENT_ASSET).payload["volatility_regime"],
+            {"low", "medium", "high"},
+        )
         self._assert_probabilities(result.scenario_probabilities)
 
     def test_prompt_injection_block_path(self) -> None:
@@ -87,7 +100,10 @@ class TestOrchestrationScenarios(unittest.TestCase):
         security = result.normalized_input.get("security", {})
         self.assertEqual(security.get("prompt_injection_risk"), "high")
         self.assertGreaterEqual(security.get("score", 0), 7)
-        self.assertEqual(result.reports[-1].payload.get("gemini_status"), "blocked_prompt_injection")
+        self.assertEqual(
+            self._report_by_name(result, AGENT_SYNTHESIS).payload.get("gemini_status"),
+            "blocked_prompt_injection",
+        )
 
     def _assert_probabilities(self, probs: dict[str, float]) -> None:
         self.assertSetEqual(set(probs.keys()), {"high_risk", "base_case", "low_risk"})
