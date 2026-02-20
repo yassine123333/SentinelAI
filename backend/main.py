@@ -19,10 +19,12 @@ from __future__ import annotations
 import logging
 import logging.config
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -169,3 +171,27 @@ app.include_router(
 @app.get("/api/health", tags=["System"], include_in_schema=False)
 async def health():
     return {"status": "ok", "version": "1.0.0"}
+
+
+# ── Frontend static serving (single-container deployment) ────────────────────
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_FRONTEND_INDEX = _FRONTEND_DIST / "index.html"
+
+if _FRONTEND_DIST.exists() and _FRONTEND_INDEX.exists():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend_root():
+        return FileResponse(_FRONTEND_INDEX)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        candidate = _FRONTEND_DIST / full_path
+        if candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+
+        return FileResponse(_FRONTEND_INDEX)
