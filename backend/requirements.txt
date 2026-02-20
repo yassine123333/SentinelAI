@@ -31,6 +31,7 @@ numpy>=1.26.0
 pandas>=2.2.0
 arch>=7.0.0
 scipy>=1.13.0
+cachetools>=5.3.0
 
 # ── PDF generation ─────────────────────────────────────────────────────────────
 weasyprint>=62.0
