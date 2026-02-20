@@ -36,6 +36,35 @@ Edit `.env.sentinelai` and set at least:
 
 ---
 
+## 2.1) Client configuration requirements
+
+### Required (must be set)
+
+- `MONGODB_URI` (example: `mongodb://sentinelai-mongo:27017`)
+- `MONGODB_DB` (example: `sentinelai`)
+- `JWT_SECRET_KEY` (long random secret)
+- `CORS_ORIGINS` (client frontend URL/domain)
+- `COOKIE_SECURE` (`false` for local HTTP, `true` for HTTPS production)
+- `GROQ_API_KEY` (LLM provider key)
+
+### Recommended in production
+
+- `BREVO_API_KEY`
+- `BREVO_SENDER_EMAIL`
+- `BREVO_SENDER_NAME`
+- `TURNSTILE_SECRET_KEY`
+- `RECAPTCHA_SECRET_KEY`
+
+### Optional / feature-dependent
+
+- `GROQ_API_KEY_2`, `GROQ_API_KEY_3` (key rotation)
+- `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
+- `WEAVIATE_URL`, `WEAVIATE_KEY`
+- `REASONING_MODEL`, `ROUTING_MODEL`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`
+- `VAULT_*` variables (if HashiCorp Vault is used)
+
+---
+
 ## 3) Pull image
 
 ```bash
