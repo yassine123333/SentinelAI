@@ -74,7 +74,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",       # lax allows cookie on same-origin redirects (dev-friendly)
+        samesite="strict",    # strict: cookie never sent on cross-site requests
         max_age=_COOKIE_MAX_AGE,
         path=_COOKIE_PATH,
     )
@@ -103,8 +103,15 @@ async def _verify_turnstile(request: Request) -> None:
     """
     settings = get_settings()
     if not settings.turnstile_secret_key:
-        logger.warning("TURNSTILE_SECRET_KEY is not set — Turnstile check skipped")
-        return
+        if settings.debug:
+            # Dev-only: skip Turnstile so local testing works without credentials
+            logger.warning("TURNSTILE_SECRET_KEY not set — Turnstile check skipped (dev mode)")
+            return
+        # Production: missing secret key means bot protection is broken — reject
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Security service unavailable. Please try again later.",
+        )
 
     token = request.headers.get("X-CF-Turnstile", "")
     if not token:
