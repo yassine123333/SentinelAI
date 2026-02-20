@@ -317,6 +317,30 @@ async def soc_ip_detail(
     }
 
 
+_ALLOWED_SOC_EVENT_TYPES: frozenset[str] = frozenset({
+    "ESCALATION_MONITORING",
+    "ESCALATION_CHALLENGED",
+    "ESCALATION_SUSPENDED",
+    "ESCALATION_BLOCKED",
+    "CAPTCHA_CHALLENGE",
+    "SESSION_SUSPENDED",
+    "IP_BLOCKED",
+    "IP_UNBLOCKED",
+    "ADMIN_UNBLOCK",
+    "AUTH_BRUTE_FORCE",
+    "RATE_LIMIT_ABUSE",
+    "UA_ROTATION",
+    "INJECTION_PROBE",
+    "SCANNER_PROBE",
+    "PATH_DISCOVERY",
+    "TOKEN_REPLAY",
+    "VECTOR_DB_EXHAUSTION",
+    "ALLOW",
+    "MONITOR",
+    "BLOCK",
+})
+
+
 @router.get(
     "/soc/audit",
     summary="[Admin] Recent SOC audit log",
@@ -334,6 +358,11 @@ async def soc_audit_log(
     admin_user: dict = Depends(require_admin),
     db=Depends(get_db),
 ) -> dict:
+    if event_type and event_type not in _ALLOWED_SOC_EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid event_type. Allowed values: {sorted(_ALLOWED_SOC_EVENT_TYPES)}",
+        )
     query: dict = {}
     if event_type:
         query["event_type"] = event_type

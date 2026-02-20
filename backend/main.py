@@ -16,6 +16,7 @@ Security controls (per presentation spec)
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import logging.config
 from contextlib import asynccontextmanager
@@ -67,7 +68,33 @@ logger = logging.getLogger(__name__)
 # (login, register, pipeline query …), causing legitimate requests to be
 # blocked after only a handful of auth calls.
 
-limiter = Limiter(key_func=get_remote_address)
+def _private_ip(ip: str) -> bool:
+    """Return True if ip is an RFC-1918 / loopback / link-local address."""
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def _real_client_ip(request: Request) -> str:
+    """
+    Resolve the real client IP without allowing X-Forwarded-For spoofing.
+
+    X-Forwarded-For is only trusted when the direct TCP connection comes from
+    a private/internal IP (i.e., a trusted reverse proxy like Caddy or nginx
+    inside the Docker network).  External clients that set XFF themselves will
+    have their connection IP used directly — spoofing is not possible.
+    """
+    connection_ip: str = (request.client.host if request.client else "") or "unknown"
+    if _private_ip(connection_ip):
+        # Connection came from a trusted internal proxy — read the leftmost XFF IP
+        xff = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        if xff:
+            return xff
+    return connection_ip
+
+
+limiter = Limiter(key_func=_real_client_ip)
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -144,7 +171,7 @@ async def soc_middleware(request: Request, call_next):
     The enforcement check is a fast MongoDB lookup (indexed on IP).
     It only fires for non-health-check endpoints to avoid overhead.
     """
-    client_ip: str = request.client.host if request.client else "unknown"
+    client_ip: str = _real_client_ip(request)
 
     # Skip enforcement for internal health checks
     if request.url.path not in ("/api/health",):
@@ -169,8 +196,19 @@ async def soc_middleware(request: Request, call_next):
                         "captcha_required": True,
                     },
                 )
-        except Exception:
-            pass  # Fail open — never block legitimate users due to DB errors
+        except Exception as _flags_exc:
+            # DB unreachable — fall back to in-memory hard-block set so
+            # permanently blocked IPs remain blocked even during DB outages.
+            logger.warning("SOC: DB flags lookup failed for %s, using memory fallback: %s", client_ip, _flags_exc)
+            try:
+                daemon = get_daemon()
+                if client_ip in daemon._hard_blocked:
+                    return JSONResponse(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        content={"detail": "Access denied."},
+                    )
+            except Exception:
+                pass  # Memory fallback also failed — fail open for non-blocked IPs
 
     # Process the request
     response = await call_next(request)
