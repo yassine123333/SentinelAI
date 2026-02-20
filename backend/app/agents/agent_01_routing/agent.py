@@ -236,28 +236,56 @@ class IntakeAgent:
     def _extract_keywords(self, raw_query: str, asset: str) -> list[str]:
         """
         Extract a clean list of search keywords for downstream agents.
-        Includes asset name + meaningful query terms.
+        Includes the ticker + up to 3 financially meaningful query terms.
+        Keywords are passed 1-to-1 to GDELT, so only emit terms that will
+        actually appear in financial news (no generic English verbs/nouns).
         """
         stop_words = {
+            # Articles / prepositions / conjunctions
             "the", "a", "an", "and", "or", "in", "of", "to", "for",
-            "with", "what", "is", "are", "how", "give", "me", "please",
-            "on", "over", "next", "days", "weeks", "months", "risk", "profile",
+            "with", "on", "over", "under", "about", "from", "into",
+            "its", "this", "that", "these", "those",
+            # Common question words
+            "what", "how", "why", "when", "where", "who", "which",
+            # Generic action verbs
+            "is", "are", "was", "were", "be", "been", "being",
+            "give", "get", "make", "take", "show", "tell", "let",
+            "please", "can", "could", "would", "will", "should",
+            "analyse", "analyze", "analysis", "assess", "evaluate",
+            "provide", "generate", "produce", "create", "perform",
+            "report", "check", "look", "view", "see", "find",
+            "run", "use", "need", "want", "like", "try", "help",
+            # Generic qualifiers
+            "full", "complete", "detailed", "comprehensive", "brief",
+            "quick", "simple", "general", "specific", "good", "bad",
+            # Financial-analysis meta-words (too generic for GDELT)
+            "scenario", "outlook", "forecast", "predict", "prediction",
+            "risk", "profile", "summary", "overview", "insight",
+            "trend", "signal", "indicator", "metric", "data",
+            "report", "result", "output", "response",
+            # Time descriptors
+            "next", "last", "past", "recent", "current", "latest",
+            "today", "now", "future", "days", "weeks", "months", "years",
+            "day", "week", "month", "year",
+            # Numbers spelled out
+            "one", "two", "three", "four", "five", "ten", "thirty",
         }
         words = re.findall(r"[a-zA-Z]{3,}", raw_query.lower())
         keywords = [w for w in words if w not in stop_words]
 
-        # Add the ticker as a keyword if not already
+        # Always lead with the ticker (most specific GDELT search term)
         if asset.lower() not in {k.lower() for k in keywords}:
             keywords.insert(0, asset)
 
-        # Deduplicate, preserve order, limit to 10
+        # Deduplicate, preserve order, cap at 4 (ticker + 3 terms).
+        # GDELT queries are sequential and each takes ~5–30 s — keep it short.
         seen: set[str] = set()
         result: list[str] = []
         for kw in keywords:
             if kw not in seen:
                 seen.add(kw)
                 result.append(kw)
-            if len(result) >= 10:
+            if len(result) >= 4:
                 break
 
         return result

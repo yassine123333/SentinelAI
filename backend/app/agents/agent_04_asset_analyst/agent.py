@@ -6,7 +6,7 @@ LangGraph node that orchestrates the three-layer quantitative pipeline:
   Layer 1 → data_fetcher     : yfinance OHLCV + VIX/OVX + validation
   Layer 2 → chronos_engine   : Chronos-2 curve-behaviour forecasting
   Layer 3 → garch_monte_carlo: GARCH(1,1) regime + Monte Carlo simulation
-  LLM     → Gemini 2.5 Flash : thinking-mode synthesis + reasoning trace
+  LLM     → Groq (llama-3.1-8b-instant) : synthesis + reasoning trace
 
 Pipeline contract
 -----------------
@@ -25,7 +25,7 @@ import logging
 import os
 from typing import Any
 
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .prompts.analyst_prompt import SYSTEM_PROMPT, build_user_prompt
@@ -47,16 +47,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _get_llm() -> ChatOllama:
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.environ.get("OLLAMA_MODEL", "llama3.1:8b-instruct-q4_K_M")
-    return ChatOllama(
+def _get_llm() -> ChatGroq:
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    model = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+    return ChatGroq(
         model=model,
-        base_url=base_url,
+        groq_api_key=api_key,
         temperature=0,
-        format="json",
-        num_predict=4096,
-        request_timeout=120,
+        max_tokens=4096,
+        model_kwargs={"response_format": {"type": "json_object"}},
     )
 
 
@@ -123,11 +122,19 @@ def agent_04_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # --- Layer 2: Chronos-2 forecast -------------------------------------
     logger.info("Agent 04 [L2] — running Chronos-2 for %s", ticker)
-    chronos_result = run_chronos_forecast(
-        ticker=ticker,
-        close_prices=close_prices,
-        forecast_horizon=horizon,
-    )
+    try:
+        chronos_result = run_chronos_forecast(
+            ticker=ticker,
+            close_prices=close_prices,
+            forecast_horizon=horizon,
+        )
+    except Exception as exc:
+        # run_chronos_forecast returns _error_result on failure, but catch any
+        # unexpected exception (e.g. Python 3.14 torch C-extension conflicts)
+        # so the rest of the pipeline (GARCH + LLM) can still run.
+        logger.warning("Agent 04 [L2] — Chronos-2 raised unexpectedly: %s", exc)
+        from .tools.chronos_engine import _error_result as _chronos_error
+        chronos_result = _chronos_error(ticker, horizon, str(exc))
 
     # --- Layer 3: GARCH + Monte Carlo ------------------------------------
     logger.info("Agent 04 [L3] — running GARCH for %s", ticker)

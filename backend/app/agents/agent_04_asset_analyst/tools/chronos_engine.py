@@ -109,12 +109,16 @@ def run_chronos_forecast(
 
     try:
         import torch  # noqa: PLC0415
-        from chronos import ChronosPipeline  # noqa: PLC0415
-    except ImportError as exc:
+        from chronos import ChronosPipeline  # noqa: PLC0415  # noqa: F401
+    except Exception as exc:
+        # Catches ImportError (missing packages) AND TypeError/ValueError raised
+        # by Python 3.14 when torch's C extension tries to re-set a docstring on
+        # _has_torch_function after another package (sentence-transformers) has
+        # already loaded torch.  Falling back to statistical defaults via GARCH.
         return _error_result(
             ticker, forecast_horizon,
-            f"Chronos dependencies not installed: {exc}. "
-            "Run: pip install chronos-forecasting torch"
+            f"Chronos/torch unavailable ({type(exc).__name__}): {exc}. "
+            "Using GARCH-only forecast."
         )
 
     try:
