@@ -2,6 +2,8 @@
 # ╔══════════════════════════════════════════════════════════╗
 # ║           SentinelAI — Dev Stack Launcher               ║
 # ╚══════════════════════════════════════════════════════════╝
+# MongoDB is hosted on Atlas — no local DB needed.
+#
 # Usage:
 #   ./start.sh          → start everything, then tail logs for 8 s
 #   ./start.sh --stop   → stop all services
@@ -24,9 +26,7 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 VENV="$ROOT_DIR/.venv/bin/activate"
 
-MONGO_NAME="sentinel-mongo"
 NEO4J_NAME="sentinel-neo4j"
-MONGO_PORT=27017
 NEO4J_BOLT=7687
 NEO4J_HTTP=7474
 BACKEND_PORT=8000
@@ -70,10 +70,6 @@ brew_service_running() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# --stop flag
-# ══════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════
 # --logs flag
 # ══════════════════════════════════════════════════════════════
 
@@ -89,21 +85,22 @@ if [[ "${1:-}" == "--logs" ]]; then
     exit 0
 fi
 
+# ══════════════════════════════════════════════════════════════
+# --stop flag
+# ══════════════════════════════════════════════════════════════
+
 if [[ "${1:-}" == "--stop" ]]; then
     step "Stopping services"
 
-    # Docker containers
+    # Neo4j Docker container
     if docker_available; then
-        for name in "$MONGO_NAME" "$NEO4J_NAME"; do
-            if container_running "$name"; then
-                docker stop "$name" >/dev/null && ok "Stopped Docker container: $name"
-            fi
-        done
+        if container_running "$NEO4J_NAME"; then
+            docker stop "$NEO4J_NAME" >/dev/null && ok "Stopped Docker container: $NEO4J_NAME"
+        fi
     fi
 
-    # Homebrew services
+    # Neo4j via Homebrew
     if command -v brew &>/dev/null; then
-        brew_service_running mongodb-community && brew services stop mongodb-community && ok "Stopped MongoDB (Homebrew)"
         brew_service_running neo4j && brew services stop neo4j && ok "Stopped Neo4j (Homebrew)"
     fi
 
@@ -125,8 +122,12 @@ fi
 if [[ "${1:-}" == "--status" ]]; then
     echo -e "\n${BOLD}SentinelAI — Service Status${RESET}"
     echo "────────────────────────────────"
-    nc -z localhost "$MONGO_PORT" 2>/dev/null  && ok "MongoDB    :$MONGO_PORT  (running)" || err "MongoDB    :$MONGO_PORT  (stopped)"
-    nc -z localhost "$NEO4J_BOLT" 2>/dev/null  && ok "Neo4j      :$NEO4J_BOLT (running)" || warn "Neo4j      :$NEO4J_BOLT (stopped) — agent_02 uses fallback"
+    # MongoDB is on Atlas — check TCP reachability of the cluster host
+    ATLAS_HOST="sentinelai.3h8nn9b.mongodb.net"
+    nc -z "$ATLAS_HOST" 27017 2>/dev/null \
+        && ok "MongoDB Atlas  $ATLAS_HOST  (reachable)" \
+        || warn "MongoDB Atlas  $ATLAS_HOST  (unreachable — check network/VPN)"
+    nc -z localhost "$NEO4J_BOLT" 2>/dev/null  && ok "Neo4j      :$NEO4J_BOLT (running)" || warn "Neo4j      :$NEO4J_BOLT (stopped) — agent_02 uses Groq fallback"
     nc -z localhost "$BACKEND_PORT" 2>/dev/null && ok "FastAPI    :$BACKEND_PORT (running)" || err "FastAPI    :$BACKEND_PORT (stopped)"
     echo ""
     exit 0
@@ -140,17 +141,16 @@ echo -e "\n${BOLD}${CYAN}╔═════════════════�
 echo -e "║       SentinelAI  Dev Stack          ║"
 echo -e "╚══════════════════════════════════════╝${RESET}\n"
 
-# ── 1. Ensure Docker is available (try to launch it) ────────
+# ── 1. Docker (needed for Neo4j only) ───────────────────────
 step "Docker"
 
 if ! command -v docker &>/dev/null; then
-    warn "Docker CLI not found — will try Homebrew instead"
+    warn "Docker CLI not found — will try Homebrew for Neo4j instead"
     USE_DOCKER=false
 elif docker info &>/dev/null 2>&1; then
     ok "Docker daemon is running"
     USE_DOCKER=true
 else
-    # Docker installed but daemon is not running → try to launch Docker Desktop
     warn "Docker daemon is not running — launching Docker Desktop..."
     open -a Docker 2>/dev/null || true
     printf "     Waiting for Docker to start (up to 60s)"
@@ -164,49 +164,13 @@ else
         sleep 1
         if [ "$i" -eq 60 ]; then
             echo ""
-            warn "Docker didn't start in time — will try Homebrew instead"
+            warn "Docker didn't start in time — will try Homebrew for Neo4j"
         fi
     done
     docker info &>/dev/null 2>&1 && USE_DOCKER=true || USE_DOCKER=false
 fi
 
-# ── 2. MongoDB ──────────────────────────────────────────────
-step "MongoDB (port $MONGO_PORT)"
-
-if nc -z localhost "$MONGO_PORT" 2>/dev/null; then
-    ok "MongoDB already reachable on :$MONGO_PORT"
-
-elif [ "$USE_DOCKER" = true ]; then
-    if container_running "$MONGO_NAME"; then
-        ok "MongoDB Docker container already running"
-    elif container_exists "$MONGO_NAME"; then
-        docker start "$MONGO_NAME" >/dev/null
-        ok "MongoDB container restarted"
-    else
-        docker run -d \
-            --name "$MONGO_NAME" \
-            -p "$MONGO_PORT:27017" \
-            --restart unless-stopped \
-            -v sentinel-mongo-data:/data/db \
-            mongo:7 >/dev/null
-        ok "MongoDB container created and started"
-    fi
-    wait_for_port localhost "$MONGO_PORT" "MongoDB"
-
-elif command -v brew &>/dev/null && brew list mongodb-community &>/dev/null 2>&1; then
-    brew services start mongodb-community >/dev/null 2>&1 && ok "MongoDB started via Homebrew"
-    wait_for_port localhost "$MONGO_PORT" "MongoDB"
-
-else
-    err "MongoDB is not running and no way to start it was found."
-    err "Options:"
-    info "  a) Install Docker Desktop: https://docker.com"
-    info "  b) brew install mongodb-community && brew services start mongodb-community"
-    info "  c) Start MongoDB manually, then re-run this script"
-    exit 1
-fi
-
-# ── 3. Neo4j ────────────────────────────────────────────────
+# ── 2. Neo4j Knowledge Graph ─────────────────────────────────
 step "Neo4j Knowledge Graph (bolt :$NEO4J_BOLT)"
 
 NEO4J_PASS=$(grep -E '^NEO4J_PASSWORD=' "$BACKEND_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' || echo "12345678")
@@ -250,18 +214,18 @@ else
     info "  To enable Neo4j: start Docker Desktop, then re-run ./start.sh"
 fi
 
-# ── 4. Python venv ──────────────────────────────────────────
+# ── 3. Python venv ───────────────────────────────────────────
 step "Python virtual environment"
 if [ ! -f "$VENV" ]; then
     err "venv not found at $VENV"
-    info "Run: python -m venv .venv && source .venv/bin/activate && pip install -r backend/requirements.txt"
+    info "Run: python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
     exit 1
 fi
 # shellcheck source=/dev/null
 source "$VENV"
 ok "venv activated ($(python --version))"
 
-# ── 5. FastAPI backend ──────────────────────────────────────
+# ── 4. FastAPI backend ───────────────────────────────────────
 step "FastAPI backend (port $BACKEND_PORT)"
 
 # Kill any stale process on same port
@@ -290,14 +254,14 @@ echo -e "  ${BOLD}── Last startup log lines ──────────�
 tail -n 8 "$ROOT_DIR/backend.log" 2>/dev/null | sed 's/^/  /'
 echo -e "  ${BOLD}────────────────────────────────────────────────────────${RESET}"
 
-# ── Summary ─────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────
 echo -e "\n${GREEN}${BOLD}══════════════════════════════════════${RESET}"
 echo -e "${GREEN}${BOLD}  SentinelAI is running!${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════${RESET}"
 echo ""
 echo -e "  ${BOLD}Backend API${RESET}   http://localhost:$BACKEND_PORT"
 echo -e "  ${BOLD}API Docs   ${RESET}   http://localhost:$BACKEND_PORT/api/docs  (debug mode only)"
-echo -e "  ${BOLD}MongoDB    ${RESET}   mongodb://localhost:$MONGO_PORT"
+echo -e "  ${BOLD}MongoDB    ${RESET}   Atlas → sentinelai.3h8nn9b.mongodb.net"
 if [ "$NEO4J_STARTED" = true ]; then
 echo -e "  ${BOLD}Neo4j Bolt ${RESET}   bolt://localhost:$NEO4J_BOLT"
 echo -e "  ${BOLD}Neo4j UI   ${RESET}   http://localhost:$NEO4J_HTTP"
