@@ -312,24 +312,128 @@ class GroqRateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# Groq client + rate-limiter singletons
+# Groq Key Rotator — multi-key round-robin with per-key rate limiters
 # ---------------------------------------------------------------------------
+
+class GroqKeyRotator:
+    """
+    Manages N Groq API keys, each with its own GroqRateLimiter instance.
+
+    Strategy:
+      - On each call, select the slot with the most available RPM tokens
+        (least recently hammered key).
+      - On RateLimitError from a slot, mark it as exhausted for
+        GROQ_KEY_COOLDOWN seconds (default: 65s = 1 full RPM window),
+        then rotate to the next available slot.
+      - If ALL slots are cooling down, fall back to heuristic.
+
+    Configuration (env vars):
+      GROQ_API_KEY         Primary key
+      GROQ_API_KEY_2       Additional key (optional)
+      GROQ_API_KEY_3       Additional key (optional)
+      GROQ_API_KEY_4       Additional key (optional)
+      GROQ_API_KEY_5       Additional key (optional)
+      GROQ_KEY_COOLDOWN    Seconds a rate-limited key is skipped (default: 65)
+    """
+
+    _COOLDOWN: float = float(os.environ.get("GROQ_KEY_COOLDOWN", "65"))
+
+    def __init__(self) -> None:
+        # Collect all configured keys in order (GROQ_API_KEY, then _2 .. _9)
+        raw_keys: list[str] = []
+        for suffix in ["", "_2", "_3", "_4", "_5", "_6", "_7", "_8", "_9"]:
+            k = os.environ.get(f"GROQ_API_KEY{suffix}", "").strip()
+            if k:
+                raw_keys.append(k)
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        keys: list[str] = []
+        for k in raw_keys:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+
+        if not keys:
+            logger.warning(
+                "No GROQ_API_KEY found. ReasoningAgent will use the local heuristic fallback.\n"
+                "Get a free key at https://console.groq.com then set GROQ_API_KEY in .env"
+            )
+
+        # One (Groq client, GroqRateLimiter) pair per key
+        self._slots: list[dict] = [
+            {
+                "key_hint": k[:8] + "…",   # for logging only, never the full key
+                "client":   Groq(api_key=k),
+                "limiter":  GroqRateLimiter(),
+                "cooldown_until": 0.0,      # monotonic timestamp
+            }
+            for k in keys
+        ]
+
+        logger.info(
+            "GroqKeyRotator: %d key(s) loaded — rotation enabled.",
+            len(self._slots),
+        )
+
+    @property
+    def available(self) -> bool:
+        return bool(self._slots)
+
+    def _best_slot(self) -> dict | None:
+        """
+        Return the slot with the most RPM tokens that is not in cooldown.
+        Returns None when all slots are cooling down.
+        """
+        now = time.monotonic()
+        candidates = [s for s in self._slots if s["cooldown_until"] <= now]
+        if not candidates:
+            return None
+        # Pick the slot whose RPM bucket has the most tokens (most headroom)
+        return max(candidates, key=lambda s: s["limiter"]._rpm_tokens)
+
+    def call(self, fn_name: str, **kwargs) -> Any:
+        """
+        Execute a Groq chat.completions.create call with automatic key rotation.
+
+        fn_name is ignored — kept for a consistent call signature.
+        Raises RuntimeError if every key is exhausted or in cooldown.
+        """
+        tried: set[int] = set()
+        while True:
+            slot = self._best_slot()
+            if slot is None:
+                raise RuntimeError(
+                    "GroqKeyRotator: all keys are rate-limited / in cooldown."
+                )
+            slot_idx = self._slots.index(slot)
+            if slot_idx in tried:
+                raise RuntimeError(
+                    "GroqKeyRotator: cycled through all available keys without success."
+                )
+            tried.add(slot_idx)
+
+            try:
+                return slot["limiter"].call(
+                    slot["client"].chat.completions.create,
+                    **kwargs,
+                )
+            except RateLimitError as exc:
+                logger.warning(
+                    "GroqKeyRotator: key [%s] hit RateLimitError — "
+                    "cooling down for %.0fs, rotating to next key.",
+                    slot["key_hint"],
+                    self._COOLDOWN,
+                )
+                slot["cooldown_until"] = time.monotonic() + self._COOLDOWN
+                # Loop: try next available slot
+
+
+# Module-level singleton — loads all GROQ_API_KEY* env vars at import time.
+_rotator = GroqKeyRotator()
+
+# Keep _GROQ_API_KEY for backward compat checks in reasoning_agent
 _GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
-
-if _GROQ_API_KEY:
-    _groq_client: Groq | None = Groq(api_key=_GROQ_API_KEY)
-else:
-    _groq_client = None
-    logger.warning(
-        "GROQ_API_KEY not set. ReasoningAgent will use the local heuristic fallback.\n"
-        "Get a free key at https://console.groq.com then run:\n"
-        "    export GROQ_API_KEY='your-key-here'"
-    )
-
-# Module-level singleton — shared across all reasoning_agent() calls.
-# Override limits via env vars before importing, or pass constructor args:
-#   _rate_limiter = GroqRateLimiter(rpm=10, rpd=5000, max_retries=3)
-_rate_limiter = GroqRateLimiter()
 
 
 # ---------------------------------------------------------------------------
@@ -655,23 +759,25 @@ def reasoning_agent(findings: dict[str, Any]) -> dict[str, Any]:
             "fallback": True,
         }
 
-    if not _GROQ_API_KEY or _groq_client is None:
-        logger.info("ReasoningAgent: using local fallback (no API key).")
+    if not _rotator.available:
+        logger.info("ReasoningAgent: using local fallback (no API keys configured).")
         return _local_fallback("no API key")
 
     context_json = json.dumps(findings, indent=None, default=str)  # compact JSON saves tokens
 
     try:
-        # ── Rate-limited Groq API call ───────────────────────────────────
-        # _rate_limiter.call() handles:
-        #   • Dual token-bucket pacing (RPM + RPD)
+        # ── Multi-key rotated Groq API call ─────────────────────────────
+        # _rotator.call() handles:
+        #   • Selects key with most RPM headroom first
+        #   • Per-key dual token-bucket pacing (RPM + RPD)
+        #   • On RateLimitError: cools down exhausted key, rotates to next
         #   • Automatic retry with exponential back-off on 429 / 5xx
         #   • Retry-After header honouring on RateLimitError
-        response = _rate_limiter.call(
-            _groq_client.chat.completions.create,
+        response = _rotator.call(
+            "chat.completions.create",
             model=_GROQ_MODEL,
             temperature=0.0,
-            max_tokens=128,                        # decision JSON is tiny; cap spend
+            max_tokens=128,                           # decision JSON is tiny; cap spend
             response_format={"type": "json_object"},  # enforce strict JSON output
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -695,18 +801,20 @@ def reasoning_agent(findings: dict[str, Any]) -> dict[str, Any]:
         logger.error("ReasoningAgent: JSON parse error — %s. Falling back.", exc)
         return _local_fallback("JSON parse error")
 
+    except RuntimeError as exc:
+        # All keys exhausted / in cooldown
+        logger.error("ReasoningAgent: %s. Falling back.", exc)
+        return _local_fallback("all keys exhausted")
+
     except RateLimitError as exc:
-        # Only reached if all retries inside _rate_limiter.call() were exhausted
         logger.error(
-            "ReasoningAgent: Groq quota exhausted after all retries — %s. "
-            "Falling back.", exc
+            "ReasoningAgent: Groq quota fully exhausted across all keys — %s. Falling back.", exc
         )
         return _local_fallback("quota exhausted")
 
     except (APIConnectionError, APIStatusError) as exc:
         logger.error(
-            "ReasoningAgent: Groq API error after all retries — %s. Falling back.",
-            exc,
+            "ReasoningAgent: Groq API error after all retries — %s. Falling back.", exc
         )
         return _local_fallback("API error")
 
