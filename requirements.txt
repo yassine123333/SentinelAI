@@ -1,9 +1,10 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # SentinelAI — Unified Backend Requirements
-# Merges: backend/requirements.txt, requirements-agent04.txt,
-#         app/agents/agent_02_geopolitical/requirements.txt,
-#         app/agents/agent_03_sentiment/requirements.txt,
-#         app/security/requirements.txt
+# Python 3.14+
+#
+# Covers: FastAPI server · Auth layer · Pipeline (agents 01–07) ·
+#         Orchestration · Security module · PDF generation · Monitoring
+#
 # Install: pip install -r requirements.txt
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -13,14 +14,33 @@ uvicorn[standard]>=0.30.0
 pydantic[email]>=2.7.0
 pydantic-settings>=2.0.0
 email-validator>=2.1.0
-python-multipart>=0.0.9
+python-multipart>=0.0.9          # form / multipart uploads
 
-# ── Task queue ─────────────────────────────────────────────────────────────────
-celery>=5.4.0
-redis>=5.0.0
+# ── Security & Auth ────────────────────────────────────────────────────────────
+python-jose[cryptography]>=3.3.0  # JWT signing (HS256)
+bcrypt>=4.0.0                     # password hashing (work-factor 12)
+hvac>=2.3.0                       # HashiCorp Vault client (optional secret mgmt)
 
-# ── AI — Google Gemini (direct SDK) ───────────────────────────────────────────
-google-genai>=1.0.0
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+slowapi>=0.1.9
+limits>=3.6.0
+
+# ── HTTP clients ───────────────────────────────────────────────────────────────
+httpx>=0.27.0                     # async HTTP (Turnstile verify, Gemini)
+requests>=2.31.0                  # sync HTTP (GDELT, Reddit, misc)
+
+# ── Databases ──────────────────────────────────────────────────────────────────
+motor>=3.5.0                      # async MongoDB driver (users, pipeline runs)
+pymongo>=4.6.0                    # motor dependency (explicit pin avoids drift)
+qdrant-client>=1.10.0             # vector store (agent 03 RAG)
+neo4j>=5.15.0                     # knowledge graph (agent 02 geopolitical)
+weaviate-client>=4.4.0            # hybrid retrieval (agent 02 geopolitical)
+
+# ── AI — Groq API ──────────────────────────────────────────────────────────────
+groq>=0.13.0                      # Groq SDK: Groq + AsyncGroq + RateLimitError
+
+# ── AI — Google Gemini ─────────────────────────────────────────────────────────
+google-genai>=1.0.0               # New official Gemini SDK (replaces google-generativeai)
 
 # ── AI — LangChain / LangGraph pipeline ───────────────────────────────────────
 langgraph>=0.2.0
@@ -28,83 +48,68 @@ langchain>=0.3.0
 langchain-core>=0.2.0
 langchain-groq>=0.2.0
 langchain-openai>=0.2.0
-langchain-google-genai>=1.0.10
 langchain-community>=0.0.28
-
-# ── AI — Groq (security agent) ────────────────────────────────────────────────
-groq>=0.9.0
+langchain-google-genai>=1.0.10    # Gemini integration via LangChain
 
 # ── Observability ──────────────────────────────────────────────────────────────
-langfuse>=2.0.0
-
-# ── Databases ──────────────────────────────────────────────────────────────────
-motor>=3.5.0
-qdrant-client>=1.10.0
-neo4j>=5.15.0
-weaviate-client>=4.4.0
-
-# ── Data sources ───────────────────────────────────────────────────────────────
-yfinance>=0.2.40
-fredapi>=0.5.2
-httpx>=0.27.0
-requests>=2.31.0
+langfuse>=2.0.0                   # LLM tracing & eval
 
 # ── Quantitative / Scientific ──────────────────────────────────────────────────
 numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.13.0
-arch>=7.0.0
+arch>=7.0.0                       # GARCH volatility modelling (agent 04)
 
-# ── Time-series forecasting (Agent 04) ────────────────────────────────────────
-# chronos-forecasting pulls in transformers + accelerate automatically
+# ── Time-series forecasting (Agent 04 — Chronos-2) ────────────────────────────
+# chronos-forecasting pulls in transformers + accelerate automatically.
+# Note: torch C-extension re-import crashes on Python 3.14 if sys.modules is
+# modified carelessly; agent_04 wraps all Chronos calls in try/except.
 chronos-forecasting>=1.4.0
-torch>=2.2.0
+torch>=2.2.0                      # CPU inference; no GPU required
+
+# ── Data sources ───────────────────────────────────────────────────────────────
+yfinance>=0.2.40                  # OHLCV prices + options chain (agent 04)
+fredapi>=0.5.2                    # FRED macroeconomic time series (agent 04)
 
 # ── Caching ────────────────────────────────────────────────────────────────────
-cachetools>=5.3.0
+cachetools>=5.3.0                 # TTLCache for GDELT responses (agent 03)
 
-# ── NLP & Entity extraction (Agent 02 Geo) ────────────────────────────────────
-gliner>=0.1.10
-# NOTE: spacy 3.x uses pydantic.v1 which is broken on Python 3.14.
+# ── NLP & Entity extraction (Agent 02 Geopolitical) ───────────────────────────
+gliner>=0.1.10                    # zero-shot NER for geopolitical entities
+networkx>=3.2.1                   # graph analysis utilities
+
+# ── Graph / Link prediction (Agent 02 Geopolitical) ───────────────────────────
+pykeen>=1.10.2                    # knowledge graph embedding & link prediction
+
+# NOTE: spaCy 3.x uses pydantic.v1 which is broken on Python 3.14.
 # Track https://github.com/explosion/spaCy/issues for a fix.
-# Once resolved: pip install "spacy>=3.7.4" && python -m spacy download en_core_web_trf
+# Once resolved, uncomment and run: python -m spacy download en_core_web_trf
 # spacy>=3.7.4
 
-# ── Graph / Link prediction (Agent 02 Geo) ────────────────────────────────────
-pykeen>=1.10.2
-networkx>=3.2.1
-
-# ── Streaming & Messaging ─────────────────────────────────────────────────────
-kafka-python>=2.0.2
-asyncio-mqtt>=0.16.0
-
 # ── Data processing ────────────────────────────────────────────────────────────
-lxml>=5.1.0
-datasets>=2.18.0
-python-dateutil>=2.8.0
+lxml>=5.1.0                       # XML parsing (UN resolutions, GDELT feeds)
+datasets>=2.18.0                  # HuggingFace datasets (agent 02/03 ingestion)
+python-dateutil>=2.8.0            # flexible date parsing
 
-# ── PDF generation ─────────────────────────────────────────────────────────────
-weasyprint>=62.0
-
-# ── Security / Auth ────────────────────────────────────────────────────────────
-python-jose[cryptography]>=3.3.0
-bcrypt>=4.0.0
-hvac>=2.3.0
-
-# ── Rate limiting ──────────────────────────────────────────────────────────────
-slowapi>=0.1.9
-limits>=3.6.0
+# ── PDF generation (Agent 07 Synthesis) ───────────────────────────────────────
+weasyprint>=62.0                  # HTML → PDF renderer
 
 # ── Monitoring ─────────────────────────────────────────────────────────────────
-prometheus-client>=0.20.0
+prometheus-client>=0.20.0         # metrics exposition (agent 02 ops)
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
-tenacity>=8.2.3
-structlog>=24.1.0
-rich>=13.7.0
-typer>=0.9.0
+tenacity>=8.2.3                   # retry logic with exponential back-off
+structlog>=24.1.0                 # structured JSON logging
+rich>=13.7.0                      # rich terminal output (scripts / CLI)
+typer>=0.9.0                      # CLI entry points (scripts)
+python-dotenv>=1.0.0              # .env file loading
 
-# ── Dev / Env ──────────────────────────────────────────────────────────────────
-python-dotenv>=1.0.0
+# ── Testing ────────────────────────────────────────────────────────────────────
 pytest>=8.2.0
 pytest-asyncio>=0.23.0
+
+# ── Not currently imported — kept for future use ───────────────────────────────
+# celery>=5.4.0                   # distributed task queue (not yet wired)
+# redis>=5.0.0                    # broker / cache backend for celery
+# kafka-python>=2.0.2             # event streaming (agent 02 design doc)
+# asyncio-mqtt>=0.16.0            # MQTT pub/sub (agent 02 design doc)
