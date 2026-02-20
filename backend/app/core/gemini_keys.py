@@ -5,6 +5,8 @@ Reads a pool of API keys from the environment:
   GROQ_API_KEY     – primary key (required)
   GROQ_API_KEY_2   – second key  (optional)
   GROQ_API_KEY_3   – third key   (optional)
+    GROQ_API_KEY_4   – fourth key  (optional)
+    GROQ_API_KEY_5   – fifth key   (optional)
   GROQ_MODEL       – model to use (default: llama-3.1-8b-instant)
 
 Rotation strategy
@@ -37,7 +39,13 @@ GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 # Build the key pool from individual env vars (preserves .env clarity).
 def _load_key_pool() -> list[str]:
     pool: list[str] = []
-    for var in ("GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3"):
+    for var in (
+        "GROQ_API_KEY",
+        "GROQ_API_KEY_2",
+        "GROQ_API_KEY_3",
+        "GROQ_API_KEY_4",
+        "GROQ_API_KEY_5",
+    ):
         key = os.getenv(var, "").strip()
         if key and key not in pool:
             pool.append(key)

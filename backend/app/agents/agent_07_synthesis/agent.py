@@ -337,28 +337,28 @@ class SynthesisAgent:
         # ── Step 6: Gemini 2.5 Flash — Standard mode ─────────────────────────
         # Standard mode = no thinking_config.
         # temperature=0.3 allows natural prose while staying grounded.
-        response = await generate_with_key_rotation(
-            model=self.model_name,
-            contents=user_prompt,
-            config=OllamaConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.3,
-                top_p=0.95,
-                max_output_tokens=8192,
-            ),
-        )
-
-        raw_text = response.text
-
-        # ── Step 7: Parse and validate LLM output ─────────────────────────────
         llm_out: _LLMNarrativeOutput
+        raw_text = ""
         try:
+            response = await generate_with_key_rotation(
+                model=self.model_name,
+                contents=user_prompt,
+                config=OllamaConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.3,
+                    top_p=0.95,
+                    max_output_tokens=4096,
+                ),
+            )
+            raw_text = response.text
+
+            # ── Step 7: Parse and validate LLM output ─────────────────────────
             json_str = _extract_json(raw_text)
-            llm_out  = _LLMNarrativeOutput.model_validate(json.loads(json_str))
+            llm_out = _LLMNarrativeOutput.model_validate(json.loads(json_str))
+
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-            # Gemini response was truncated or invalid JSON — use deterministic fallback
-            # so the pipeline always produces a synthesis output rather than failing.
+            # LLM response was malformed JSON or schema-invalid.
             reason = f"{type(exc).__name__}: {exc}"
             self._audit(
                 "synthesis_parse_error",
@@ -370,6 +370,23 @@ class SynthesisAgent:
             )
             logger.warning(
                 "Agent 07 LLM parse failed (%s) — using deterministic fallback for %s",
+                reason, payload.query_id,
+            )
+            llm_out = _build_fallback_narrative(payload, reason)
+
+        except Exception as exc:
+            # API-level generation errors (e.g., 400 json_validate_failed, transient provider errors)
+            # should not fail the full pipeline.
+            reason = f"{type(exc).__name__}: {exc}"
+            self._audit(
+                "synthesis_llm_error",
+                query_id=payload.query_id,
+                fingerprint=fp,
+                error=reason,
+                fallback="deterministic",
+            )
+            logger.warning(
+                "Agent 07 LLM call failed (%s) — using deterministic fallback for %s",
                 reason, payload.query_id,
             )
             llm_out = _build_fallback_narrative(payload, reason)

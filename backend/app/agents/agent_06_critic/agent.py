@@ -34,7 +34,7 @@ from pydantic import ValidationError
 
 from app.core.gemini_keys import OllamaConfig, generate_with_key_rotation, has_gemini_keys
 
-from .schemas import CriticInput, CriticOutput
+from .schemas import CheckResult, CriticInput, CriticOutput, RetryInstruction
 from .tools.confidence_scorer import get_confidence_breakdown
 from .tools.consistency_checker import check_consistency
 from .tools.source_verifier import verify_sources
@@ -215,11 +215,109 @@ class CriticAgent:
     model_name = "ollama/llama3.1:8b-instruct-q4_K_M"
 
     def __init__(self) -> None:
-        if not has_gemini_keys():
-            raise RuntimeError("LLM client is not available.")
+        self._llm_available = has_gemini_keys()
+        if not self._llm_available:
+            logger.warning("Agent 06 running in deterministic fallback mode (LLM unavailable).")
         # Token-bucket rate limiter state
         self._tokens: float = float(_RATE_LIMIT_CALLS)
         self._last_refill: float = time.monotonic()
+
+    def _fallback_output(
+        self,
+        payload: CriticInput,
+        source_result: dict,
+        consistency_result: dict,
+        confidence_result: dict,
+        reason: str,
+    ) -> CriticOutput:
+        source_passed = bool(source_result.get("passed", False))
+        consistency_passed = bool(consistency_result.get("passed", False))
+        confidence_passed = bool(confidence_result.get("passed", False))
+
+        narrative_passed = bool(
+            payload.geopolitical.risk_summary.strip()
+            and payload.asset_analyst.short_term_outlook.strip()
+        )
+        completeness_passed = bool(
+            (payload.geopolitical.key_events or payload.geopolitical.macro_indicators)
+            and (payload.sentiment.news_signals or payload.sentiment.social_signals)
+            and payload.asset_analyst.key_patterns
+        )
+
+        checks = [
+            CheckResult(
+                check_name="source_attribution",
+                passed=source_passed,
+                score=1.0 if source_passed else 0.0,
+                details=f"Deterministic source verification (rate={source_result.get('attribution_rate', 0.0)}).",
+                affected_agents=list(source_result.get("missing_sources_agents", [])),
+            ),
+            CheckResult(
+                check_name="internal_consistency",
+                passed=consistency_passed,
+                score=1.0 if consistency_passed else 0.0,
+                details=f"Deterministic consistency check contradictions={consistency_result.get('contradiction_count', 0)}.",
+                affected_agents=list({
+                    a for c in consistency_result.get("contradictions", []) for a in c.get("agents", [])
+                }),
+            ),
+            CheckResult(
+                check_name="confidence_calibration",
+                passed=confidence_passed,
+                score=1.0 if confidence_passed else 0.0,
+                details=f"Deterministic confidence aggregate={confidence_result.get('aggregate', 0.0)} threshold={confidence_result.get('threshold', _PASS_THRESHOLD)}.",
+                affected_agents=list((confidence_result.get("low_confidence_agents") or {}).keys()),
+            ),
+            CheckResult(
+                check_name="narrative_coherence",
+                passed=narrative_passed,
+                score=1.0 if narrative_passed else 0.5,
+                details="Deterministic fallback narrative check based on required upstream summaries.",
+                affected_agents=[] if narrative_passed else ["agent_02", "agent_04"],
+            ),
+            CheckResult(
+                check_name="completeness",
+                passed=completeness_passed,
+                score=1.0 if completeness_passed else 0.5,
+                details="Deterministic fallback completeness check for geo/sentiment/asset fields.",
+                affected_agents=[] if completeness_passed else ["agent_02", "agent_03", "agent_04"],
+            ),
+        ]
+
+        failed = [c for c in checks if not c.passed]
+        verdict = "PASS" if not failed else "FAIL"
+        retry_instructions: list[RetryInstruction] = []
+        if verdict == "FAIL":
+            for c in failed:
+                retry_instructions.append(
+                    RetryInstruction(
+                        agent_id=(c.affected_agents[0] if c.affected_agents else "agent_02"),
+                        reason=f"{c.check_name} failed in deterministic critic fallback mode.",
+                        specific_corrections=[c.details],
+                        priority="high" if c.check_name in {"source_attribution", "internal_consistency"} else "medium",
+                    )
+                )
+
+        reasoning_trace = (
+            f"Critic deterministic fallback activated due to LLM unavailability: {reason}. "
+            f"source={source_passed}, consistency={consistency_passed}, confidence={confidence_passed}, "
+            f"narrative={narrative_passed}, completeness={completeness_passed}."
+        )
+        if len(reasoning_trace) < 100:
+            reasoning_trace += " Deterministic evaluation completed safely with no LLM dependency."
+
+        return CriticOutput(
+            query_id=payload.query_id,
+            verdict=verdict,
+            overall_confidence=float(confidence_result.get("aggregate", 0.0)),
+            checks=checks,
+            retry_instructions=retry_instructions,
+            reasoning_trace=reasoning_trace,
+            flagged_claims=[],
+            sources_verified=int(source_result.get("sources_verified", 0)),
+            sources_total=int(source_result.get("sources_total", 0)),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
 
@@ -327,19 +425,62 @@ class CriticAgent:
         # A verification agent must be greedy/deterministic. Any temperature above 0
         # introduces randomness that can cause the model to deviate from the locked
         # values or fabricate evidence.
-        response = await generate_with_key_rotation(
-            model=self.model_name,
-            contents=user_prompt,
-            config=OllamaConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.0,        # greedy — no hallucination slack
-                top_p=1.0,
-                max_output_tokens=8192,
-            ),
-        )
+        if not self._llm_available:
+            output = self._fallback_output(
+                payload,
+                source_result=source_result,
+                consistency_result=consistency_result,
+                confidence_result=confidence_result,
+                reason="no_api_keys",
+            )
+            self._audit(
+                "critic_done_fallback",
+                query_id=payload.query_id,
+                asset=payload.asset,
+                verdict=output.verdict,
+                overall_confidence=output.overall_confidence,
+                sources_verified=output.sources_verified,
+                sources_total=output.sources_total,
+                retry_instructions_count=len(output.retry_instructions),
+                attempt=payload.attempt,
+                fingerprint=fp,
+            )
+            return output
 
-        raw_text = response.text
+        try:
+            response = await generate_with_key_rotation(
+                model=self.model_name,
+                contents=user_prompt,
+                config=OllamaConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                    top_p=1.0,
+                    max_output_tokens=2048,
+                ),
+            )
+            raw_text = response.text
+        except Exception as exc:
+            output = self._fallback_output(
+                payload,
+                source_result=source_result,
+                consistency_result=consistency_result,
+                confidence_result=confidence_result,
+                reason=str(exc),
+            )
+            self._audit(
+                "critic_done_fallback",
+                query_id=payload.query_id,
+                asset=payload.asset,
+                verdict=output.verdict,
+                overall_confidence=output.overall_confidence,
+                sources_verified=output.sources_verified,
+                sources_total=output.sources_total,
+                retry_instructions_count=len(output.retry_instructions),
+                attempt=payload.attempt,
+                fingerprint=fp,
+            )
+            return output
 
         # ── Step 6: Parse, normalize, and validate ───────────────────────────
         try:
