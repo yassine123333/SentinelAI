@@ -6,6 +6,19 @@ services:
     container_name: sentinelai-backend
     env_file:
       - ./backend/.env
+    environment:
+      # SOC Security Daemon — container-safe defaults
+      # Nginx and Azure NSG blocking disabled (no nginx sidecar in this compose)
+      # The daemon still runs, detects threats, and logs to MongoDB (audit mode)
+      - BLOCK_LAYER_NGINX=false
+      - BLOCK_LAYER_AZURE=false
+      - BLOCK_DRY_RUN=false
+      - SOC_POLL_INTERVAL=10
+      - SOC_RATE_THRESHOLD=30
+      - SOC_AUTH_FAIL_THRESH=5
+      - SOC_UA_ROTATION_THRESH=3
+      - SOC_ENABLE_MONGO_PROFILING=false
+      - NGINX_LOG_PATH=/var/log/nginx/access.log
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     restart: unless-stopped
@@ -25,3 +38,27 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sentinelai-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  caddy_data:
+  caddy_config:

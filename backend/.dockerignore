@@ -10,3 +10,6 @@ __pycache__
 .env
 tests
 *.log
+# SOC runtime files — generated at runtime, not build-time
+app/security/blocklist.conf
+app/agents/agent_03_sentiment/qdrant_data/
