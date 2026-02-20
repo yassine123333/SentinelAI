@@ -4,9 +4,14 @@ import {
   useContext,
   useEffect,
   useReducer,
+  useRef,
+  useState,
   type ReactNode,
 } from 'react'
-import { authApi, tokenStore } from '@/services/api'
+import { Turnstile } from '@marsidev/react-turnstile'
+import { authApi, tokenStore, pendingHeaders } from '@/services/api'
+import { useTurnstile } from '@/hooks/useTurnstile'
+import { useRecaptcha } from '@/hooks/useRecaptcha'
 import type {
   ChangePasswordRequest,
   LoginRequest,
@@ -102,6 +107,78 @@ function getOrStartRefresh() {
   return _refreshPromise
 }
 
+// ── Security Gate overlay ──────────────────────────────────────────────────────
+// Shown when auto-login is pending and Cloudflare + reCAPTCHA verification is in
+// progress. For most real users the Turnstile managed challenge auto-passes in
+// under a second so the overlay is barely visible.
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string
+
+interface SecurityGateProps {
+  onTurnstileSuccess: (token: string) => void
+  onTurnstileError: () => void
+  onTurnstileExpire: () => void
+  widgetRef: React.RefObject<import('@marsidev/react-turnstile').TurnstileInstance | undefined>
+}
+
+function SecurityGateOverlay({ onTurnstileSuccess, onTurnstileError, onTurnstileExpire, widgetRef }: SecurityGateProps) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '1.5rem',
+        background: '#060b18',
+      }}
+    >
+      {/* Sentinel logo mark */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M14 2L3 8v12l11 6 11-6V8L14 2z" stroke="#00e87b" strokeWidth="1.5" fill="none" />
+          <path d="M14 7l-7 4v6l7 4 7-4v-6l-7-4z" fill="#00e87b" fillOpacity="0.15" stroke="#00e87b" strokeWidth="1" />
+        </svg>
+        <span style={{ fontFamily: 'DM Serif Display, serif', fontStyle: 'italic', fontSize: '1.25rem', color: '#eef2ff', letterSpacing: '-0.01em' }}>
+          SentinelAI
+        </span>
+      </div>
+
+      {/* Status */}
+      <div style={{ textAlign: 'center' }}>
+        <p style={{ fontFamily: 'DM Sans, sans-serif', fontSize: '0.875rem', color: '#8b9dc3', margin: 0 }}>
+          Verifying session security…
+        </p>
+      </div>
+
+      {/* Turnstile widget — visible so interactive challenges can be solved */}
+      <div style={{ minHeight: 65 }}>
+        <Turnstile
+          ref={widgetRef}
+          siteKey={TURNSTILE_SITE_KEY}
+          onSuccess={onTurnstileSuccess}
+          onError={onTurnstileError}
+          onExpire={onTurnstileExpire}
+          options={{ theme: 'dark', size: 'normal' }}
+        />
+      </div>
+
+      {/* Spinner */}
+      <div style={{
+        width: 20, height: 20,
+        border: '2px solid rgba(0,232,123,0.2)',
+        borderTop: '2px solid #00e87b',
+        borderRadius: '50%',
+        animation: 'spin 0.8s linear infinite',
+      }} />
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
 // ── Provider ───────────────────────────────────────────────────────────────────
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, {
@@ -111,39 +188,111 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingVerification: null,
   })
 
-  // On mount: attempt silent refresh only when the user opted into being remembered.
-  // Without the flag we skip the cookie entirely — forces a new login each session.
-  // Uses a module-level promise so StrictMode's double-mount shares one request.
+  // showSecurityGate is true only when the user opted into "remember me" and
+  // we need to verify Turnstile + reCAPTCHA before the silent token refresh.
+  const [showSecurityGate, setShowSecurityGate] = useState(() => rememberMeStore.get())
+
+  // Guard against double-execution in React StrictMode / multiple re-renders
+  const autoLoginAttempted = useRef(false)
+
+  const turnstile   = useTurnstile()
+  const { execute: executeRecaptcha } = useRecaptcha()
+
+  // ── Case 1: no rememberMe → immediately settle to logged-out ─────────────
   useEffect(() => {
-    let cancelled = false
+    if (!rememberMeStore.get()) {
+      dispatch({ type: 'LOGOUT' })
+    }
+  }, [])
+
+  // ── Case 2: rememberMe=true → wait for Turnstile + reCAPTCHA, then refresh ─
+  // The effect fires whenever Turnstile verification state changes.
+  // `isTurnstileErrored` lets us fail open if Cloudflare's widget throws.
+  const [isTurnstileErrored, setIsTurnstileErrored] = useState(false)
+
+  const handleTurnstileError = useCallback(() => {
+    turnstile.onError()
+    setIsTurnstileErrored(true)
+  }, [turnstile])
+
+  // Refs to read volatile values inside the effect without adding them to deps.
+  // executeRecaptcha gets a new reference every time useRecaptcha's isReady changes,
+  // and turnstile.token changes after Turnstile completes — both would re-trigger the
+  // effect and cause the cleanup's `cancelled = true` to fire mid-execution.
+  const executeRecaptchaRef = useRef(executeRecaptcha)
+  executeRecaptchaRef.current = executeRecaptcha
+
+  const turnstileTokenRef = useRef(turnstile.token)
+  turnstileTokenRef.current = turnstile.token
+
+  // Prevents a second dispatch if, in StrictMode, the effect somehow runs twice
+  // after autoLoginAttempted already guarded the outer gate.
+  const authDispatched = useRef(false)
+
+  useEffect(() => {
+    if (!showSecurityGate) return
+    // Wait until Turnstile either verified (real user) or errored (network/config issue).
+    // Either outcome allows us to proceed — Turnstile errors fail open.
+    if (!turnstile.isVerified && !isTurnstileErrored) return
+    // Prevent double-execution
+    if (autoLoginAttempted.current) return
+    autoLoginAttempted.current = true
 
     const tryRefresh = async () => {
-      if (!rememberMeStore.get()) {
-        dispatch({ type: 'LOGOUT' })
-        return
+      // ① reCAPTCHA v3 — invisible, always runs; fails open on error.
+      //    Read via ref so a reference change (isReady flip) doesn't re-trigger this effect.
+      const recaptchaToken = await executeRecaptchaRef.current('login')
+      if (recaptchaToken) {
+        pendingHeaders.set({ 'X-Recaptcha-Token': recaptchaToken })
       }
 
+      // ② Turnstile — inject token if verified; backend reads X-CF-Turnstile.
+      //    Read via ref for the same reason.
+      if (turnstileTokenRef.current) {
+        pendingHeaders.set({ 'X-CF-Turnstile': turnstileTokenRef.current })
+      }
+
+      // ③ Silent refresh using the HttpOnly cookie
       const data = await getOrStartRefresh()
-      if (cancelled) return
+
+      // Guard against a theoretical double-dispatch (StrictMode safety net).
+      if (authDispatched.current) return
+      authDispatched.current = true
 
       if (!data) {
+        // Refresh failed — session expired or cookie gone.
+        // Clear rememberMe so the security gate doesn't loop on next page load.
+        rememberMeStore.clear()
+        // Batch dispatch + setShowSecurityGate into one React render so there is
+        // no intermediate frame where the overlay is gone but isAuthenticated is
+        // still false (which briefly shows a blank screen before navigate fires).
         dispatch({ type: 'LOGOUT' })
+        setShowSecurityGate(false)
         return
       }
 
       tokenStore.set(data.access_token)
       try {
         const { data: user } = await authApi.me()
-        if (!cancelled) dispatch({ type: 'LOGIN_SUCCESS', user })
+        // Batch: hide overlay and set authenticated state in the same render.
+        dispatch({ type: 'LOGIN_SUCCESS', user })
+        setShowSecurityGate(false)
       } catch {
-        if (!cancelled) dispatch({ type: 'LOGOUT' })
+        rememberMeStore.clear()
+        dispatch({ type: 'LOGOUT' })
+        setShowSecurityGate(false)
       }
     }
 
     tryRefresh()
-    return () => { cancelled = true }
-  }, [])
+    // No cleanup / cancelled flag: AuthProvider lives for the entire app lifetime,
+    // so the effect never truly unmounts. The autoLoginAttempted + authDispatched
+    // refs handle idempotency instead.
+  }, [showSecurityGate, turnstile.isVerified, isTurnstileErrored])
+  // executeRecaptcha and turnstile.token are intentionally read via refs above
+  // to avoid re-triggering this effect when those values change mid-execution.
 
+  // ── Explicit login ────────────────────────────────────────────────────────
   const login = useCallback(async (data: LoginRequest, rememberMe = false) => {
     const { data: res } = await authApi.login(data)
     rememberMeStore.set(rememberMe)
@@ -197,6 +346,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{ ...state, login, register, logout, verifyEmail, resendVerification, clearPending, updateProfile, changePassword }}
     >
+      {/* Security gate: shown while Cloudflare Turnstile + reCAPTCHA are being
+          verified before the silent token refresh. Hidden once verification
+          completes (pass or fail-open). */}
+      {showSecurityGate && (
+        <SecurityGateOverlay
+          widgetRef={turnstile.widgetRef}
+          onTurnstileSuccess={turnstile.onSuccess}
+          onTurnstileError={handleTurnstileError}
+          onTurnstileExpire={turnstile.onExpire}
+        />
+      )}
       {children}
     </AuthContext.Provider>
   )
