@@ -33,6 +33,8 @@ from app.api.routes.pipeline import router as pipeline_router
 from app.api.routes.admin import router as admin_router
 from app.config.settings import get_settings
 from app.db.mongodb import close_db, connect_db
+from app.security.collectors import RequestEvent, emit_event
+from app.security.daemon import get_daemon
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -75,7 +77,15 @@ async def lifespan(app: FastAPI):
     """Manage startup / shutdown events."""
     logger.info("SentinelAI starting up …")
     await connect_db()
+
+    # Start the SOC security daemon as a background asyncio task.
+    # It monitors all platform layers (FastAPI, MongoDB, Nginx) continuously.
+    _daemon = get_daemon()
+    await _daemon.start()
+
     yield
+
+    await _daemon.stop()
     await close_db()
     logger.info("SentinelAI shut down.")
 
@@ -114,6 +124,78 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
 )
+
+
+# ── SOC Middleware — feed every request into the security daemon ──────────────
+# This is the primary FastAPI log source for the daemon.
+# It emits a RequestEvent for every HTTP request (before and after processing)
+# so the daemon can track rate, auth failures, injection probes, UA rotation.
+
+@app.middleware("http")
+async def soc_middleware(request: Request, call_next):
+    """
+    Emit a RequestEvent to the SOC daemon queue for every request.
+
+    Also enforces daemon decisions at request time:
+      - BLOCKED IPs  → 403 immediately (no processing)
+      - SUSPENDED IPs → 403 session suspended
+      - CAPTCHA IPs  → 403 with challenge hint
+
+    The enforcement check is a fast MongoDB lookup (indexed on IP).
+    It only fires for non-health-check endpoints to avoid overhead.
+    """
+    client_ip: str = request.client.host if request.client else "unknown"
+
+    # Skip enforcement for internal health checks
+    if request.url.path not in ("/api/health",):
+        try:
+            from app.security.persistence import get_ip_flags
+            flags = await get_ip_flags(client_ip)
+            if flags["blocked"]:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "Access denied."},
+                )
+            if flags["suspended"]:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "Account temporarily suspended due to suspicious activity."},
+                )
+            if flags["captcha_required"]:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={
+                        "detail": "Security verification required. Please complete the challenge.",
+                        "captcha_required": True,
+                    },
+                )
+        except Exception:
+            pass  # Fail open — never block legitimate users due to DB errors
+
+    # Process the request
+    response = await call_next(request)
+
+    # Emit event to the SOC daemon queue (non-blocking)
+    emit_event(
+        RequestEvent(
+            source="fastapi",
+            ip=client_ip,
+            path=request.url.path,
+            method=request.method,
+            status_code=response.status_code,
+            user_agent=request.headers.get("user-agent", ""),
+            extra={
+                "auth_scheme": (
+                    request.headers.get("authorization", "").split(" ")[0]
+                    if request.headers.get("authorization")
+                    else ""
+                ),
+                "content_type": request.headers.get("content-type", ""),
+            },
+        )
+    )
+
+    return response
 
 
 # ── HSTS + security headers middleware ───────────────────────────────────────
