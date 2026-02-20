@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sentinelai-backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sentinelai-frontend
+    env_file:
+      - ./frontend/.env
+    environment:
+      - VITE_PROXY_TARGET=http://backend:8000
+      - CHOKIDAR_USEPOLLING=true
+    ports:
+      - "${FRONTEND_HOST_PORT:-5173}:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
