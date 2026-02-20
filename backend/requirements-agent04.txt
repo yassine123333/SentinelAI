@@ -21,8 +21,8 @@ arch>=6.3.0
 numpy>=1.26.0
 pandas>=2.2.0
 
-# LLM — Local Ollama
-langchain-ollama>=0.2.0
+# LLM — Groq API
+langchain-groq>=0.2.0
 langchain-core>=0.2.0
 
 # Pydantic (shared with FastAPI)

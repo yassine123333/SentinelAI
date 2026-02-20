@@ -1,69 +1,137 @@
-import { useState, useRef, KeyboardEvent } from 'react'
+/**
+ * PreferencesTab — curated asset watchlist manager.
+ *
+ * Security: no free-text input — all tickers come from a fixed catalogue.
+ * Users toggle assets on/off; the list is saved to the backend via PATCH /auth/me.
+ */
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { AlertCircle, CheckCircle2, Plus, X, Zap } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Check, X } from 'lucide-react'
 import { useAuth, parseApiError } from '@/context/AuthContext'
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 
-// ── Popular tickers grouped by asset class ─────────────────────────────────────
-const POPULAR = [
-  { group: 'Crypto',      tickers: ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD'] },
-  { group: 'Indices',     tickers: ['SPY', 'QQQ', '^GSPC', '^DJI', '^VIX'] },
-  { group: 'Tech',        tickers: ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'GOOGL', 'META', 'AMZN'] },
-  { group: 'Commodities', tickers: ['GC=F', 'CL=F', 'SI=F', 'NG=F'] },
-  { group: 'FX',          tickers: ['EUR=X', 'JPY=X', 'GBP=X', 'CHF=X'] },
-]
+// ── Full asset catalogue ───────────────────────────────────────────────────────
+const CATALOGUE = [
+  {
+    group: 'Crypto', color: '#f59e0b',
+    assets: [
+      { ticker: 'BTC-USD',   name: 'Bitcoin'   },
+      { ticker: 'ETH-USD',   name: 'Ethereum'  },
+      { ticker: 'SOL-USD',   name: 'Solana'    },
+      { ticker: 'BNB-USD',   name: 'BNB'       },
+      { ticker: 'XRP-USD',   name: 'XRP'       },
+      { ticker: 'ADA-USD',   name: 'Cardano'   },
+      { ticker: 'AVAX-USD',  name: 'Avalanche' },
+      { ticker: 'DOGE-USD',  name: 'Dogecoin'  },
+      { ticker: 'DOT-USD',   name: 'Polkadot'  },
+      { ticker: 'LINK-USD',  name: 'Chainlink' },
+      { ticker: 'MATIC-USD', name: 'Polygon'   },
+      { ticker: 'UNI-USD',   name: 'Uniswap'   },
+      { ticker: 'ATOM-USD',  name: 'Cosmos'    },
+      { ticker: 'LTC-USD',   name: 'Litecoin'  },
+      { ticker: 'BCH-USD',   name: 'Bitcoin Cash' },
+      { ticker: 'ARB-USD',   name: 'Arbitrum'  },
+      { ticker: 'OP-USD',    name: 'Optimism'  },
+      { ticker: 'INJ-USD',   name: 'Injective' },
+      { ticker: 'SUI20947-USD', name: 'Sui'   },
+      { ticker: 'TIA-USD',   name: 'Celestia'  },
+    ],
+  },
+  {
+    group: 'US Equities', color: '#60a5fa',
+    assets: [
+      { ticker: 'AAPL',  name: 'Apple'         },
+      { ticker: 'NVDA',  name: 'NVIDIA'         },
+      { ticker: 'MSFT',  name: 'Microsoft'      },
+      { ticker: 'TSLA',  name: 'Tesla'          },
+      { ticker: 'GOOGL', name: 'Alphabet'       },
+      { ticker: 'META',  name: 'Meta'           },
+      { ticker: 'AMZN',  name: 'Amazon'         },
+      { ticker: 'NFLX',  name: 'Netflix'        },
+      { ticker: 'AMD',   name: 'AMD'            },
+      { ticker: 'INTC',  name: 'Intel'          },
+      { ticker: 'JPM',   name: 'JPMorgan'       },
+      { ticker: 'BAC',   name: 'Bank of America'},
+      { ticker: 'GS',    name: 'Goldman Sachs'  },
+      { ticker: 'MS',    name: 'Morgan Stanley' },
+      { ticker: 'BRK-B', name: 'Berkshire B'   },
+      { ticker: 'XOM',   name: 'ExxonMobil'    },
+      { ticker: 'CVX',   name: 'Chevron'        },
+      { ticker: 'JNJ',   name: 'Johnson & J.'  },
+      { ticker: 'V',     name: 'Visa'           },
+      { ticker: 'MA',    name: 'Mastercard'     },
+    ],
+  },
+  {
+    group: 'Indices & ETFs', color: '#c084fc',
+    assets: [
+      { ticker: 'SPY',   name: 'S&P 500 ETF'   },
+      { ticker: 'QQQ',   name: 'Nasdaq 100'     },
+      { ticker: 'IWM',   name: 'Russell 2000'   },
+      { ticker: 'DIA',   name: 'Dow Jones ETF'  },
+      { ticker: '^VIX',  name: 'VIX Volatility' },
+      { ticker: 'TLT',   name: '20Y US Bonds'   },
+      { ticker: 'GLD',   name: 'Gold ETF'       },
+      { ticker: 'SLV',   name: 'Silver ETF'     },
+      { ticker: 'EFA',   name: 'EAFE (Intl Dev)'},
+      { ticker: 'EEM',   name: 'Emerging Mkts'  },
+      { ticker: 'VTI',   name: 'Total US Mkt'   },
+      { ticker: 'ARKK',  name: 'ARK Innovation' },
+    ],
+  },
+  {
+    group: 'Commodities', color: '#fb923c',
+    assets: [
+      { ticker: 'GC=F',  name: 'Gold'           },
+      { ticker: 'SI=F',  name: 'Silver'         },
+      { ticker: 'CL=F',  name: 'Crude Oil (WTI)'},
+      { ticker: 'BZ=F',  name: 'Brent Crude'    },
+      { ticker: 'NG=F',  name: 'Natural Gas'    },
+      { ticker: 'HG=F',  name: 'Copper'         },
+      { ticker: 'PL=F',  name: 'Platinum'       },
+      { ticker: 'PA=F',  name: 'Palladium'      },
+      { ticker: 'ZC=F',  name: 'Corn'           },
+      { ticker: 'ZW=F',  name: 'Wheat'          },
+    ],
+  },
+  {
+    group: 'FX & Rates', color: '#34d399',
+    assets: [
+      { ticker: 'DX-Y.NYB', name: 'USD Index'  },
+      { ticker: 'EUR=X',    name: 'EUR / USD'  },
+      { ticker: 'JPY=X',    name: 'USD / JPY'  },
+      { ticker: 'GBP=X',    name: 'GBP / USD'  },
+      { ticker: 'CHF=X',    name: 'USD / CHF'  },
+      { ticker: 'AUD=X',    name: 'AUD / USD'  },
+      { ticker: 'CAD=X',    name: 'USD / CAD'  },
+      { ticker: 'CNY=X',    name: 'USD / CNY'  },
+      { ticker: '^TNX',     name: '10Y US Yield'},
+      { ticker: '^TYX',     name: '30Y US Yield'},
+    ],
+  },
+] as const
 
 const MAX_TICKERS = 20
 
-// Matches backend: [A-Z0-9^=.-]{1,12}
-const TICKER_RE = /^[A-Z0-9^=.\-]{1,12}$/
-
 export default function PreferencesTab() {
   const { user, updateProfile } = useAuth()
-
   const [tickers, setTickers] = useState<string[]>(user?.ticker_preferences ?? [])
-  const [input, setInput]     = useState('')
-  const [inputError, setInputError] = useState('')
   const [serverError, setServerError] = useState('')
-  const [saved, setSaved]     = useState(false)
+  const [saved, setSaved] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [activeGroup, setActiveGroup] = useState<string>(CATALOGUE[0].group)
 
-  // ── Ticker management ────────────────────────────────────────────────────────
-  const addTicker = (raw: string) => {
-    const t = raw.trim().toUpperCase()
-    if (!t) return
-    if (!TICKER_RE.test(t)) {
-      setInputError(`"${t}" is not a valid ticker symbol`)
-      return
-    }
-    if (tickers.includes(t)) {
-      setInputError(`${t} is already in your list`)
-      return
-    }
-    if (tickers.length >= MAX_TICKERS) {
-      setInputError(`Maximum ${MAX_TICKERS} tickers allowed`)
-      return
-    }
-    setTickers((prev) => [...prev, t])
-    setInput('')
-    setInputError('')
+  const toggle = (ticker: string) => {
+    setTickers(prev => {
+      if (prev.includes(ticker)) return prev.filter(t => t !== ticker)
+      if (prev.length >= MAX_TICKERS) return prev   // silently ignore when full
+      return [...prev, ticker]
+    })
   }
 
-  const removeTicker = (t: string) => setTickers((prev) => prev.filter((x) => x !== t))
+  const remove = (ticker: string) => setTickers(prev => prev.filter(t => t !== ticker))
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
-      e.preventDefault()
-      addTicker(input)
-    }
-    if (e.key === 'Backspace' && input === '' && tickers.length > 0) {
-      setTickers((prev) => prev.slice(0, -1))
-    }
-  }
-
-  // ── Save ─────────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     setServerError('')
     setSaved(false)
@@ -80,177 +148,176 @@ export default function PreferencesTab() {
   }
 
   const hasChanges = JSON.stringify(tickers) !== JSON.stringify(user?.ticker_preferences ?? [])
+  const isFull = tickers.length >= MAX_TICKERS
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
+
       {/* Header */}
       <div>
         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-sentinel-green-neon flex items-center gap-2">
-          <span className="opacity-60">&gt;_</span> TICKER_PREFERENCES
+          <span className="opacity-60">&gt;_</span> WATCHLIST_PREFERENCES
         </p>
         <p className="font-sans text-xs text-dark-text-muted mt-1">
-          Add up to {MAX_TICKERS} instruments to personalise your intelligence feed.
-          Accepts stocks, ETFs, crypto pairs, indices, FX, and commodities.
+          Select up to {MAX_TICKERS} instruments to monitor. Click any asset to toggle it on or off.
         </p>
       </div>
 
-      {/* Error */}
+      {/* Server error */}
       <AnimatePresence>
         {serverError && (
           <motion.div
-            initial={{ opacity: 0, y: -8, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: 'auto' }}
-            exit={{ opacity: 0, y: -4, height: 0 }}
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
             role="alert"
-            className={cn(
-              'flex items-start gap-3 px-4 py-3 rounded-md',
-              'bg-sentinel-red-neon/8',
-              'border border-sentinel-red-neon/20',
-            )}
+            className="flex items-start gap-3 px-4 py-3 rounded-md bg-sentinel-red-neon/8 border border-sentinel-red-neon/20"
           >
-            <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-sentinel-red-neon" aria-hidden />
-            <p className="font-mono text-xs text-sentinel-red-neon leading-relaxed">
-              {serverError}
-            </p>
+            <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-sentinel-red-neon" />
+            <p className="font-mono text-xs text-sentinel-red-neon">{serverError}</p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Tag input area */}
+      {/* Current watchlist chips */}
       <div className="flex flex-col gap-2">
-        <label className="font-mono text-[11px] font-medium uppercase tracking-[0.18em] flex items-center gap-2 text-dark-text-secondary">
-          <span className="opacity-60 text-sentinel-green-neon">&gt;_</span>
-          Watchlist ({tickers.length}/{MAX_TICKERS})
-        </label>
-
-        {/* Tag chip container + input */}
-        <div
-          onClick={() => inputRef.current?.focus()}
-          className={cn(
-            'min-h-[3.5rem] flex flex-wrap gap-2 px-3 py-2.5 rounded-md border cursor-text',
-            'transition-all duration-200',
-            'bg-dark-surface border-dark-border',
-            'focus-within:border-sentinel-green-neon focus-within:shadow-[0_0_0_3px_rgba(0,232,123,0.15)]',
-            inputError && '!border-sentinel-red-neon',
-            inputError && '!shadow-[0_0_0_3px_rgba(255,45,74,0.15)]',
-          )}
-        >
-          <AnimatePresence initial={false}>
-            {tickers.map((t) => (
-              <motion.span
-                key={t}
-                layout
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.8, opacity: 0 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md',
-                  'font-mono text-[11px] font-medium tracking-wider',
-                  'bg-sentinel-green-neon/10 text-sentinel-green-neon border border-sentinel-green-neon/20',
-                )}
-              >
-                {t}
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeTicker(t) }}
-                  className={cn(
-                    'rounded-sm transition-colors',
-                    'hover:text-dark-text-primary',
-                  )}
-                  aria-label={`Remove ${t}`}
-                >
-                  <X size={10} strokeWidth={2.5} />
-                </button>
-              </motion.span>
-            ))}
-          </AnimatePresence>
-
-          {tickers.length < MAX_TICKERS && (
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value.toUpperCase())
-                setInputError('')
-              }}
-              onKeyDown={handleKeyDown}
-              onBlur={() => { if (input) addTicker(input) }}
-              placeholder={tickers.length === 0 ? 'Type a ticker and press Enter…' : ''}
-              className={cn(
-                'flex-1 min-w-[140px] bg-transparent outline-none',
-                'font-mono text-sm text-dark-text-primary',
-                'placeholder:text-dark-text-muted placeholder:italic',
-              )}
-              aria-label="Add ticker symbol"
-            />
+        <div className="flex items-center justify-between">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-dark-text-secondary">
+            Your Watchlist ({tickers.length}/{MAX_TICKERS})
+          </p>
+          {isFull && (
+            <span className="font-mono text-[9px] text-amber-400/80 uppercase tracking-widest">
+              Limit reached
+            </span>
           )}
         </div>
 
-        {inputError ? (
-          <p className="flex items-center gap-1.5 text-xs font-mono text-sentinel-red-neon">
-            <span aria-hidden>!</span>{inputError}
-          </p>
-        ) : (
-          <p className="text-xs font-mono text-dark-text-muted">
-            Press <kbd className="px-1 py-0.5 rounded bg-dark-elevated font-mono text-[10px]">Enter</kbd>,{' '}
-            <kbd className="px-1 py-0.5 rounded bg-dark-elevated font-mono text-[10px]">Space</kbd> or{' '}
-            <kbd className="px-1 py-0.5 rounded bg-dark-elevated font-mono text-[10px]">,</kbd> to add.
-            Backspace removes the last entry.
-          </p>
-        )}
+        <div className={cn(
+          'min-h-[2.5rem] flex flex-wrap gap-1.5 p-2.5 rounded-lg border',
+          'bg-dark-surface border-dark-border',
+        )}>
+          {tickers.length === 0 ? (
+            <span className="font-mono text-[10px] text-dark-text-muted/40 italic self-center ml-1">
+              No assets selected — toggle assets below
+            </span>
+          ) : (
+            <AnimatePresence initial={false}>
+              {tickers.map(t => (
+                <motion.span
+                  key={t}
+                  layout
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.8, opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md font-mono text-[10px] font-medium tracking-wider bg-sentinel-green-neon/10 text-sentinel-green-neon border border-sentinel-green-neon/20"
+                >
+                  {t}
+                  <button
+                    type="button"
+                    onClick={() => remove(t)}
+                    className="hover:text-sentinel-red-neon transition-colors rounded-sm"
+                    aria-label={`Remove ${t}`}
+                  >
+                    <X size={9} strokeWidth={2.5} />
+                  </button>
+                </motion.span>
+              ))}
+            </AnimatePresence>
+          )}
+        </div>
       </div>
 
-      {/* Divider */}
       <div className="h-px bg-dark-border" />
 
-      {/* Quick-add popular tickers */}
+      {/* Catalogue */}
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          <Zap size={13} className="text-dark-text-secondary" />
-          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-dark-text-secondary">
-            Quick Add
-          </p>
+        <p className="font-mono text-[10px] uppercase tracking-widest text-dark-text-muted">
+          Asset Catalogue
+        </p>
+
+        {/* Group tabs */}
+        <div className="flex gap-1 flex-wrap">
+          {CATALOGUE.map(cat => (
+            <button
+              key={cat.group}
+              onClick={() => setActiveGroup(cat.group)}
+              className={cn(
+                'px-2.5 py-1 rounded-md font-mono text-[9px] uppercase tracking-widest transition-all duration-150',
+                activeGroup === cat.group
+                  ? 'text-dark-void font-bold'
+                  : 'bg-dark-surface border border-dark-border text-dark-text-muted hover:text-dark-text-secondary',
+              )}
+              style={activeGroup === cat.group ? { backgroundColor: cat.color, border: `1px solid ${cat.color}` } : {}}
+            >
+              {cat.group}
+            </button>
+          ))}
         </div>
 
-        {POPULAR.map(({ group, tickers: suggestions }) => (
-          <div key={group} className="flex flex-col gap-2">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-dark-text-muted">
-              {group}
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {suggestions.map((t) => {
-                const already = tickers.includes(t)
-                const full    = tickers.length >= MAX_TICKERS && !already
+        {/* Asset grid */}
+        <AnimatePresence mode="wait">
+          {CATALOGUE.filter(c => c.group === activeGroup).map(cat => (
+            <motion.div
+              key={cat.group}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.15 }}
+              className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2"
+            >
+              {cat.assets.map(({ ticker, name }) => {
+                const selected = tickers.includes(ticker)
+                const disabled = isFull && !selected
                 return (
-                  <button
-                    key={t}
+                  <motion.button
+                    key={ticker}
                     type="button"
-                    disabled={full}
-                    onClick={() => already ? removeTicker(t) : addTicker(t)}
+                    disabled={disabled}
+                    onClick={() => toggle(ticker)}
+                    whileHover={disabled ? {} : { scale: 1.03 }}
+                    whileTap={disabled ? {} : { scale: 0.97 }}
                     className={cn(
-                      'inline-flex items-center gap-1 px-2.5 py-1 rounded-md border transition-all duration-150',
-                      'font-mono text-[10px] tracking-wider',
-                      already
-                        ? 'bg-sentinel-green-neon/12 border-sentinel-green-neon/30 text-sentinel-green-neon'
-                        : 'bg-dark-elevated border-dark-border text-dark-text-secondary hover:border-sentinel-green-neon/40 hover:text-sentinel-green-neon',
-                      full && 'opacity-40 cursor-not-allowed',
+                      'relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left',
+                      'transition-all duration-150 overflow-hidden',
+                      selected
+                        ? 'bg-sentinel-green-neon/10 border-sentinel-green-neon/40'
+                        : 'bg-dark-elevated border-dark-border hover:border-dark-text-muted/25',
+                      disabled && 'opacity-40 cursor-not-allowed',
                     )}
-                    aria-pressed={already}
-                    aria-label={already ? `Remove ${t}` : `Add ${t}`}
+                    aria-pressed={selected}
                   >
-                    {already ? <X size={9} strokeWidth={2.5} /> : <Plus size={9} strokeWidth={2.5} />}
-                    {t}
-                  </button>
+                    {/* Category colour bar */}
+                    <div
+                      className="absolute left-0 top-0 w-[3px] h-full rounded-l-xl"
+                      style={{ backgroundColor: cat.color, opacity: selected ? 1 : 0.3 }}
+                    />
+
+                    <div className="flex flex-col min-w-0 pl-1">
+                      <span className={cn(
+                        'font-mono text-[10px] font-bold truncate',
+                        selected ? 'text-sentinel-green-neon' : 'text-dark-text-primary',
+                      )}>
+                        {ticker}
+                      </span>
+                      <span className="font-mono text-[8px] text-dark-text-muted truncate leading-none mt-0.5">
+                        {name}
+                      </span>
+                    </div>
+
+                    {selected && (
+                      <div className="ml-auto flex-shrink-0 w-4 h-4 rounded-full bg-sentinel-green-neon/20 flex items-center justify-center">
+                        <Check size={8} className="text-sentinel-green-neon" strokeWidth={3} />
+                      </div>
+                    )}
+                  </motion.button>
                 )
               })}
-            </div>
-          </div>
-        ))}
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
-      {/* Divider */}
       <div className="h-px bg-dark-border" />
 
       {/* Save */}
@@ -265,18 +332,13 @@ export default function PreferencesTab() {
           onClick={handleSave}
         >
           {saved ? (
-            <>
-              <CheckCircle2 size={14} />
-              <span>Saved</span>
-            </>
+            <><CheckCircle2 size={14} /><span>Saved</span></>
           ) : (
-            <span>Save Preferences</span>
+            <span>Save Watchlist</span>
           )}
         </Button>
         {!hasChanges && !saved && (
-          <span className="font-mono text-[10px] text-dark-text-muted">
-            No changes to save
-          </span>
+          <span className="font-mono text-[10px] text-dark-text-muted">No changes to save</span>
         )}
       </div>
     </div>

@@ -224,7 +224,7 @@ def _adapt_agent04_output(raw: Any, asset: str) -> dict[str, Any]:
             "price_trend": "neutral",
             "key_patterns": ["Pipeline error — minimal baseline"],
             "short_term_outlook": f"Asset data unavailable for {asset}.",
-            "sources": [f"yfinance:{asset}"],
+            "sources": [f"https://finance.yahoo.com/quote/{asset}"],
             "confidence": 0.30,
         }
 
@@ -270,11 +270,20 @@ def _adapt_agent04_output(raw: Any, asset: str) -> dict[str, Any]:
     if not patterns:
         patterns = [f"Volatility regime: {regime}"]
 
-    sources = data_fetch.get("sources_used", [f"yfinance:{asset}"])
-    if isinstance(sources, list):
-        sources = [str(s) for s in sources[:10]]
-    else:
-        sources = [f"yfinance:{asset}"]
+    # Transform any "yfinance:TICKER" → valid Yahoo Finance URL so the
+    # source verifier (which requires http URLs or FRED-format IDs) passes.
+    raw_sources = data_fetch.get("sources_used", [])
+    sources = []
+    for s in (raw_sources if isinstance(raw_sources, list) else []):
+        s_str = str(s).strip()
+        if s_str.startswith("yfinance:"):
+            ticker = s_str.split(":", 1)[1]
+            sources.append(f"https://finance.yahoo.com/quote/{ticker}")
+        elif s_str:
+            sources.append(s_str)
+    if not sources:
+        sources = [f"https://finance.yahoo.com/quote/{asset}"]
+    sources = sources[:10]
 
     # ── GARCH fields ─────────────────────────────────────────────────────────
     # current_annualised_vol is in %; convert to fraction for QuantRiskOutput
@@ -375,7 +384,7 @@ async def node_critic(state: PipelineState) -> dict[str, Any]:
             price_trend=aa_raw.get("price_trend", "neutral"),
             key_patterns=list(aa_raw.get("key_patterns", ["N/A"]))[:6],
             short_term_outlook=str(aa_raw.get("short_term_outlook", f"Analysis for {asset}."))[:2000],
-            sources=list(aa_raw.get("sources", [f"yfinance:{asset}"]))[:20],
+            sources=list(aa_raw.get("sources", [f"https://finance.yahoo.com/quote/{asset}"]))[:20],
             confidence=float(aa_raw.get("confidence", 0.5)),
         )
         # Build QuantRiskOutput from agent_04 extended fields
@@ -385,7 +394,7 @@ async def node_critic(state: PipelineState) -> dict[str, Any]:
             monte_carlo_scenarios=dict(aa_raw.get("_monte_carlo_scenarios", {"bull": 0.25, "base": 0.50, "bear": 0.25})),
             garch_forecast=dict(aa_raw.get("_garch_forecast", {"vol_next_5d": 0.20, "regime": "medium"})),
             risk_level=str(aa_raw.get("_risk_level", "medium")),
-            sources=list(aa_raw.get("sources", [f"yfinance:{asset}"]))[:20],
+            sources=list(aa_raw.get("sources", [f"https://finance.yahoo.com/quote/{asset}"]))[:20],
             confidence=float(aa_raw.get("confidence", 0.5)),
         )
 
@@ -488,7 +497,7 @@ async def node_synthesis(state: PipelineState) -> dict[str, Any]:
             price_trend=aa_raw.get("price_trend", "neutral"),
             key_patterns=list(aa_raw.get("key_patterns", ["N/A"]))[:6],
             short_term_outlook=str(aa_raw.get("short_term_outlook", f"Analysis for {asset}."))[:2000],
-            sources=list(aa_raw.get("sources", [f"yfinance:{asset}"]))[:20],
+            sources=list(aa_raw.get("sources", [f"https://finance.yahoo.com/quote/{asset}"]))[:20],
             confidence=float(aa_raw.get("confidence", 0.5)),
         )
         qr = QuantRiskOutput(
@@ -497,7 +506,7 @@ async def node_synthesis(state: PipelineState) -> dict[str, Any]:
             monte_carlo_scenarios=dict(aa_raw.get("_monte_carlo_scenarios", {"bull": 0.25, "base": 0.50, "bear": 0.25})),
             garch_forecast=dict(aa_raw.get("_garch_forecast", {"vol_next_5d": 0.20, "regime": "medium"})),
             risk_level=str(aa_raw.get("_risk_level", "medium")),
-            sources=list(aa_raw.get("sources", [f"yfinance:{asset}"]))[:20],
+            sources=list(aa_raw.get("sources", [f"https://finance.yahoo.com/quote/{asset}"]))[:20],
             confidence=float(aa_raw.get("confidence", 0.5)),
         )
 

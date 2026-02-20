@@ -32,13 +32,15 @@ class RAGPipeline:
 
     def __init__(
         self,
-        gemini_api_key: str,
+        groq_api_key: str = "",
+        gemini_api_key: str = "",   # kept for backward compat, ignored
         ttl_seconds: int = 2 * 24 * 60 * 60,  # 2 days
         db_path: Optional[str] = None,
     ):
+        api_key = groq_api_key or gemini_api_key
         self.store = DocumentStore(db_path=db_path, ttl_seconds=ttl_seconds)
-        self.parser = InputParser(gemini_api_key=gemini_api_key)
-        self.embedder = Embedder(gemini_api_key=gemini_api_key)
+        self.parser = InputParser(groq_api_key=api_key)
+        self.embedder = Embedder(groq_api_key=api_key)
         self.retriever = Retriever(store=self.store, embedder=self.embedder)
         self.context_builder = ContextBuilder(retriever=self.retriever)
 

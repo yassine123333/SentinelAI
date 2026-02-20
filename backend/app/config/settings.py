@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     # Set to false in local dev (HTTP). Must be true in production (HTTPS).
     cookie_secure: bool = True
 
-    # ── AI ────────────────────────────────────────────────────────────────────
+    # ── AI (Groq) ─────────────────────────────────────────────────────────────
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.1-8b-instant"
+    # Legacy field — kept so old imports don't crash
     gemini_api_key: str = ""
 
     # ── CORS (comma-separated) ────────────────────────────────────────────────
