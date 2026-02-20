@@ -1,0 +1,15 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.env
+tests
+*.log
+# SOC runtime files — generated at runtime, not build-time
+app/security/blocklist.conf
+app/agents/agent_03_sentiment/qdrant_data/
