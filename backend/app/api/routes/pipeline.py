@@ -21,8 +21,9 @@ Security:
 from __future__ import annotations
 
 import logging
+import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
@@ -88,6 +89,11 @@ async def _run_pipeline_bg(
             "run_id": run_id,
             "user_id": user_id,
             "raw_query": raw_query,
+            # Hints passed to node_intake (Agent 01) so it can guide extraction
+            "asset_hint": asset_hint or None,
+            "timeframe_hint": timeframe_hint or None,
+            "risk_focus_hint": risk_focus_hint or None,
+            # These will be overwritten by node_intake with parsed values
             "asset": asset_hint or "",
             "timeframe": timeframe_hint or "",
             "risk_focus": risk_focus_hint or "",
@@ -97,7 +103,7 @@ async def _run_pipeline_bg(
             "sentiment": {},
             "asset_analyst": {},
             "critic": {},
-            "critic_attempt": 0,
+            "critic_attempt": 1,  # CriticInput.attempt requires ge=1
             "synthesis": {},
             "pdf_bytes": None,
             "status": "running",
@@ -177,8 +183,12 @@ def _build_report_response(run: dict) -> ReportResponse:
         critic={
             "verdict": critic.get("verdict"),
             "overall_confidence": critic.get("overall_confidence"),
-            "checks_passed": critic.get("checks_passed"),
-            "checks_total": critic.get("checks_total"),
+            # CriticOutput has `checks: list[CheckResult]`, not flat counts.
+            # Derive the counts from the list so the frontend can display them.
+            "checks_passed": sum(
+                1 for c in critic.get("checks", []) if c.get("passed")
+            ),
+            "checks_total": len(critic.get("checks", [])),
             "retry_count": snap.get("critic_attempt", 0),
         } if critic else None,
         created_at=run["created_at"],
@@ -433,3 +443,106 @@ async def get_report_pdf(
             "Cache-Control": "private, no-store",  # don't cache financial reports
         },
     )
+
+
+@router.get(
+    "/chart/{ticker}",
+    summary="Historical price data + Chronos forecast for a ticker",
+    description=(
+        "Returns OHLCV history from yfinance plus the latest Chronos-2 forecast "
+        "if a recent completed analysis exists for this ticker."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_chart_data(
+    request: Request,
+    ticker: str,
+    days: int = Query(default=90, ge=7, le=365),
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    # Strict ticker validation — only safe characters allowed
+    ticker = ticker.upper()
+    if not re.match(r"^[A-Z0-9^=.\-]{1,20}$", ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
+
+    # ── Fetch historical OHLCV from yfinance ───────────────────────────────────
+    try:
+        import yfinance as yf  # lazy import — already in requirements.txt
+
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days=days)
+
+        df = yf.download(
+            ticker,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=end_dt.strftime("%Y-%m-%d"),
+            progress=False,
+            auto_adjust=True,
+        )
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No price data found for {ticker}")
+
+        # Flatten MultiIndex columns if present (yfinance ≥0.2.36 behaviour)
+        if hasattr(df.columns, "levels"):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+        prices = [
+            {
+                "date": str(idx.date()),
+                "open":   round(float(row.get("Open",  row.get("open",  0))), 4),
+                "high":   round(float(row.get("High",  row.get("high",  0))), 4),
+                "low":    round(float(row.get("Low",   row.get("low",   0))), 4),
+                "close":  round(float(row.get("Close", row.get("close", 0))), 4),
+                "volume": int(row.get("Volume", row.get("volume", 0))),
+            }
+            for idx, row in df.iterrows()
+        ]
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("chart endpoint yfinance error for %s: %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch price data: {exc!s}")
+
+    # ── Look up the most recent Chronos forecast from MongoDB ──────────────────
+    forecast = None
+    try:
+        recent_run = await db["pipeline_runs"].find_one(
+            {"asset": {"$regex": f"^{re.escape(ticker)}$", "$options": "i"}, "status": "done"},
+            sort=[("completed_at", -1)],
+            projection={"state_snapshot.agent_04_output": 1, "completed_at": 1},
+        )
+
+        if recent_run:
+            snap = recent_run.get("state_snapshot", {})
+            a04 = snap.get("agent_04_output", {}) or {}
+            chronos = a04.get("chronos") or {}
+
+            if chronos and chronos.get("median_terminal") and prices:
+                current_price = prices[-1]["close"]
+                horizon = (a04.get("input") or {}).get("forecast_horizon", 30)
+                forecast_date = (end_dt + timedelta(days=horizon)).strftime("%Y-%m-%d")
+
+                forecast = {
+                    "horizon_days": horizon,
+                    "current_price": current_price,
+                    "p10":    round(float(chronos.get("p10_terminal",  current_price * 0.90)), 4),
+                    "median": round(float(chronos.get("median_terminal", current_price)),       4),
+                    "p90":    round(float(chronos.get("p90_terminal",  current_price * 1.10)), 4),
+                    "directional_bias": chronos.get("directional_bias", "neutral"),
+                    "uncertainty_score": round(float(chronos.get("uncertainty_score", 0.5)), 3),
+                    "forecast_date": forecast_date,
+                    "run_completed_at": str(recent_run.get("completed_at", "")),
+                }
+    except Exception as exc:
+        logger.warning("chart endpoint forecast lookup failed for %s: %s", ticker, exc)
+        # non-fatal — return price data without forecast
+
+    return {
+        "ticker": ticker,
+        "days":   days,
+        "prices": prices,
+        "forecast": forecast,
+    }

@@ -24,6 +24,7 @@ import type {
   VerifyEmailResponse,
 } from '@/types/auth'
 import type {
+  ChartData,
   PipelineReport,
   PipelineStatus,
   QueryRequest,
@@ -248,6 +249,13 @@ export const pipelineApi = {
    */
   getHistory: (limit = 20, skip = 0) =>
     api.get<UserRunItem[]>('/history', { params: { limit, skip } }),
+
+  /**
+   * Fetch historical OHLCV prices + Chronos-2 forecast for a ticker.
+   * Returns 404 if no data is available for the symbol.
+   */
+  getChartData: (ticker: string, days = 90) =>
+    api.get<ChartData>(`/chart/${encodeURIComponent(ticker)}`, { params: { days } }),
 }
 
 export default api

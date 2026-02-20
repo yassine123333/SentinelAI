@@ -16,6 +16,9 @@ class PipelineState(TypedDict, total=False):
 
     # ── Agent 01: Routing ─────────────────────────────────────────────────────
     raw_query: str
+    asset_hint: str | None        # raw hint from user request (read by node_intake)
+    timeframe_hint: str | None    # raw hint from user request (read by node_intake)
+    risk_focus_hint: str | None   # raw hint from user request (read by node_intake)
     asset: str
     timeframe: str
     risk_focus: str

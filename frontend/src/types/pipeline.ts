@@ -102,6 +102,36 @@ export interface CriticMeta {
   retry_count?: number
 }
 
+// ── Chart data ────────────────────────────────────────────────────────────────
+
+export interface ChartPrice {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ChartForecast {
+  horizon_days: number
+  current_price: number
+  p10: number
+  median: number
+  p90: number
+  directional_bias: string
+  uncertainty_score: number
+  forecast_date: string
+  run_completed_at: string
+}
+
+export interface ChartData {
+  ticker: string
+  days: number
+  prices: ChartPrice[]
+  forecast: ChartForecast | null
+}
+
 export interface PipelineReport {
   run_id: string
   asset?: string
