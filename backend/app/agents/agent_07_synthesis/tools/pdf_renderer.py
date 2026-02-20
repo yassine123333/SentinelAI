@@ -258,7 +258,7 @@ _HTML_TEMPLATE = """\
 
 <!-- ── Footer ─────────────────────────────────────────────────────────────── -->
 <div class="report-footer">
-  SentinelAI | Powered by Gemini 2.5 Flash &nbsp;|&nbsp; Critic verdict:
+  SentinelAI | Powered by Groq (Llama-3.1) &nbsp;|&nbsp; Critic verdict:
   <strong>{verdict}</strong> &nbsp;|&nbsp; Overall confidence:
   <strong>{overall_confidence_pct}%</strong>
   <div class="disclaimer">

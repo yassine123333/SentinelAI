@@ -3,7 +3,7 @@
 import os
 
 # ─── API Keys ───────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBkJnUohjx3N1TGV9xFQZ6FKvGksocfmUk")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # ─── Defaults ───────────────────────────────────────────────
 DEFAULT_TIME_WINDOW_DAYS = 2
@@ -27,4 +27,4 @@ RAG_TTL_SECONDS = 2 * 24 * 60 * 60       # 2 days max data retention
 RAG_MIN_SIMILARITY = 0.3                  # Min cosine sim for retrieval
 RAG_TOP_K = 10                            # Max documents per search
 RAG_MAX_POSTS_STORED = 50                 # Max Reddit posts stored per run
-RAG_EMBEDDING_MODEL = "gemini-embedding-001"
+RAG_EMBEDDING_MODEL = "all-MiniLM-L6-v2" # Local sentence-transformers model

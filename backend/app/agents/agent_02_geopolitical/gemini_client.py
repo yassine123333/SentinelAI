@@ -1,193 +1,74 @@
 """
-Gemini 2.5 Flash Client  —  google-genai SDK
-=============================================
-Install:  pip install -U google-genai
+Groq LLM Client + Sentence-Transformer Embeddings for Agent 02 (GeoKG-RAG)
+===========================================================================
 
-Changelog:
-  v3 — fix _safe_text returning None on thinking models
-       fix embedding model path (gemini-embedding-exp-03-07 fallback chain)
-       fix classification returning None crash
-  v4 — rotate across multiple API keys after each call
-       Reads config.GEMINI_API_KEY (list of strings), e.g.:
-         GEMINI_API_KEY = [KEY1, KEY2, KEY3, KEY4]
+Replaces the previous google-genai / Gemini client.
+- LLM calls  →  groq.Groq (sync, llama-3.1-8b-instant)
+- Embeddings →  sentence-transformers all-MiniLM-L6-v2 (384 dims, local, no API)
+
+All public function signatures are kept identical so geokg_agent.py,
+weaviate_client.py, and extraction/pipeline.py need zero changes.
 """
 from __future__ import annotations
-import itertools
+
 import json
 import logging
 import re
 import time
 from typing import Any
-from time import sleep
 
 import config
 
 logger = logging.getLogger(__name__)
 
-# ── Model names ───────────────────────────────────────────────────────────────
-_CHAT_MODEL = config.REASONING_MODEL   # "gemini-2.5-flash"
+# ── Groq model ────────────────────────────────────────────────────────────────
+_GROQ_MODEL = getattr(config, "GROQ_MODEL", "llama-3.1-8b-instant")
+_GROQ_KEY   = getattr(config, "GROQ_API_KEY", "")
 
-# Embedding model — tried in order until one works
-_EMBED_CANDIDATES = [
-    "gemini-embedding-exp-03-07",
-    "text-embedding-004",
-    "embedding-001",
-]
-_EMBED_MODEL: str | None = None
-_EMBED_DIM:   int        = 768
+# ── Embedding model (lazy-loaded) ─────────────────────────────────────────────
+_EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+_EMBED_DIM        = 384
+_st_model         = None   # SentenceTransformer instance, loaded on first use
 
 
-# ── API Key Rotation ──────────────────────────────────────────────────────────
-
-def _load_api_keys() -> list[str]:
-    """
-    Load API keys from config.GEMINI_API_KEY.
-    Supports both a list (preferred) and a plain string (fallback).
-    Empty strings are filtered out automatically.
-    """
-    raw = getattr(config, "GEMINI_API_KEY", None)
-
-    if isinstance(raw, (list, tuple)):
-        keys = [k for k in raw if k and k.strip()]
-        if keys:
-            logger.info(f"API key rotation enabled: {len(keys)} key(s) loaded.")
-            return keys
-
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-
-    raise RuntimeError(
-        "No valid Gemini API key found in config.\n"
-        "Make sure at least one of GEMINI_API_KEY1..4 is set in your .env file."
-    )
-
-
-_API_KEYS: list[str] = _load_api_keys()
-_key_cycle = itertools.cycle(_API_KEYS)
-_current_key: str = next(_key_cycle)
-
-# One client instance per key, cached to avoid re-creation overhead
-_clients: dict[str, Any] = {}
-
-
-def _rotate_key() -> str:
-    """Advance to the next API key and return it."""
-    global _current_key
-    _current_key = next(_key_cycle)
-    logger.debug(f"Rotated to API key ending in ...{_current_key[-4:]}")
-    return _current_key
-
-
-def _get_client(api_key: str | None = None):
-    """
-    Return (and cache) a google-genai Client for the given API key.
-    If api_key is None, uses the current key.
-    """
-    key = api_key or _current_key
-    if key not in _clients:
+def _get_st_model():
+    """Lazy-load sentence-transformers model (downloads once, then cached)."""
+    global _st_model
+    if _st_model is None:
         try:
-            from google import genai
-            _clients[key] = genai.Client(api_key=key)
+            from sentence_transformers import SentenceTransformer
+            logger.info(f"Loading sentence-transformer model: {_EMBED_MODEL_NAME}")
+            _st_model = SentenceTransformer(_EMBED_MODEL_NAME)
+            logger.info("Sentence-transformer model loaded.")
         except ImportError:
             raise ImportError(
-                "google-genai not installed.\n"
-                "Run:  pip install -U google-genai"
+                "sentence-transformers not installed.\n"
+                "Run: pip install sentence-transformers"
             )
-    return _clients[key]
+    return _st_model
 
 
-# ── Embedding model resolution ────────────────────────────────────────────────
+# ── Groq client (lazy, singleton) ─────────────────────────────────────────────
+_groq_client = None
 
-def _resolve_embed_model() -> str:
-    global _EMBED_MODEL, _EMBED_DIM
-    if _EMBED_MODEL is not None:
-        return _EMBED_MODEL
 
-    client = _get_client()
-
-    def _try_model(name: str) -> bool:
-        global _EMBED_MODEL, _EMBED_DIM
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
         try:
-            result = client.models.embed_content(model=name, contents="test")
-            if result.embeddings and result.embeddings[0].values:
-                _EMBED_MODEL = name
-                _EMBED_DIM   = len(result.embeddings[0].values)
-                logger.info(f"Embedding model: {name!r}  dim={_EMBED_DIM}")
-                return True
-        except Exception:
-            logger.debug(f"Embedding model {name!r} not available")
-        return False
-
-    for candidate in _EMBED_CANDIDATES:
-        if _try_model(candidate):
-            return _EMBED_MODEL
-
-    try:
-        for m in client.models.list():
-            if "embed" in m.name.lower():
-                if _try_model(m.name):
-                    return _EMBED_MODEL
-    except Exception:
-        pass
-
-    raise RuntimeError(
-        "No working Gemini embedding model found.\n"
-        f"Tried: {_EMBED_CANDIDATES}\n"
-        "Run:  python scripts/list_gemini_models.py"
-    )
-
-
-# ── Safe text extractor ───────────────────────────────────────────────────────
-
-def _safe_text(response) -> str:
-    """
-    Extract text from a Gemini response object.
-    Always returns a str, never None.
-    """
-    try:
-        text = response.text
-        if text is not None:
-            return str(text)
-    except Exception:
-        pass
-
-    try:
-        candidates = getattr(response, "candidates", None)
-        if not candidates:
-            raise ValueError("Gemini returned no candidates (possible safety block or quota exceeded).")
-
-        candidate = candidates[0]
-        finish_reason = getattr(candidate, "finish_reason", None)
-        fr_name = getattr(finish_reason, "name", str(finish_reason)).upper()
-
-        if fr_name == "SAFETY":
-            raise ValueError(
-                "Gemini safety filter blocked this request. "
-                "Try rephrasing without specific weapons/violence terms."
+            from groq import Groq
+            if not _GROQ_KEY:
+                raise RuntimeError(
+                    "GROQ_API_KEY not set.\n"
+                    "Add GROQ_API_KEY=gsk_... to backend/.env"
+                )
+            _groq_client = Groq(api_key=_GROQ_KEY)
+        except ImportError:
+            raise ImportError(
+                "groq not installed.\n"
+                "Run: pip install groq"
             )
-
-        content_obj = getattr(candidate, "content", None)
-        parts = getattr(content_obj, "parts", []) if content_obj else []
-        if parts:
-            text = "".join(getattr(p, "text", "") or "" for p in parts)
-            if text.strip():
-                return text
-
-        if fr_name == "MAX_TOKENS":
-            raise ValueError(
-                "Gemini hit MAX_TOKENS with no recoverable text. "
-                "Increase max_tokens parameter."
-            )
-
-        raise ValueError(
-            f"Gemini returned empty response "
-            f"(finish_reason={fr_name}, parts={len(parts)})."
-        )
-
-    except ValueError:
-        raise
-    except Exception as e:
-        raise ValueError(f"Could not extract text from Gemini response: {e}") from e
+    return _groq_client
 
 
 # ── Core LLM call ─────────────────────────────────────────────────────────────
@@ -199,82 +80,46 @@ def call_gemini(
     max_tokens: int = 4096,
     temperature: float = 0.2,
     json_mode: bool = False,
-    retries: int = 10,
+    retries: int = 4,
 ) -> str:
     """
-    Call Gemini and return the response text.
-    - Rotates to the next API key after every successful call.
-    - On rate-limit (429), rotates immediately and retries with the next key.
-    - Never returns None — raises on unrecoverable errors.
+    Call Groq LLM and return the response text.
+    Signature unchanged from the original Gemini version.
     """
-    from google.genai import types
+    client = _get_groq_client()
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
-    model_name = model or _CHAT_MODEL
-
-    cfg_kwargs: dict[str, Any] = {
-        "max_output_tokens": max_tokens,
+    kwargs: dict[str, Any] = {
+        "model":       model or _GROQ_MODEL,
+        "messages":    messages,
         "temperature": temperature,
+        "max_tokens":  max_tokens,
     }
     if json_mode:
-        cfg_kwargs["response_mime_type"] = "application/json"
+        kwargs["response_format"] = {"type": "json_object"}
 
     last_error: Exception | None = None
-
     for attempt in range(retries):
-        current_key = _current_key
-        client = _get_client(current_key)
-
-        gen_config = types.GenerateContentConfig(
-            **cfg_kwargs,
-            system_instruction=system if system else None,
-        )
-
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=gen_config,
+            resp = client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content or ""
+        except Exception as exc:
+            last_error = exc
+            err_str = str(exc)
+            wait = 2 ** attempt
+            if "429" in err_str or "rate" in err_str.lower():
+                wait = max(wait, 10)
+            logger.warning(
+                f"Groq call attempt {attempt + 1}/{retries} failed: {exc}"
+                + (f" — retrying in {wait}s" if attempt < retries - 1 else "")
             )
-            result = _safe_text(response)
+            if attempt < retries - 1:
+                time.sleep(wait)
 
-            # Rotate key for the next caller
-            _rotate_key()
-            return result
-
-        except ValueError:
-            raise   # safety block / unrecoverable — don't retry
-
-        except Exception as e:
-            last_error = e
-            err_str = str(e)
-
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Rotate immediately on rate limit and retry with fresh key
-                new_key = _rotate_key()
-                sleep(30)
-                logger.warning(
-                    f"Rate limit on key ...{current_key[-4:]} "
-                    f"(attempt {attempt+1}/{retries}). "
-                    f"Rotating to key ...{new_key[-4:]}..."
-                )
-                # If we've cycled through every key once, back off
-                if attempt > 0 and attempt % len(_API_KEYS) == 0:
-                    wait = 30
-                    logger.warning(f"All keys rate-limited. Waiting {wait}s...")
-                    time.sleep(wait)
-                else:
-                    time.sleep(1)
-            else:
-                wait = 2 ** attempt
-                logger.warning(
-                    f"Gemini call attempt {attempt+1}/{retries} failed: {e}"
-                    + (f" — retrying in {wait}s" if attempt < retries - 1 else "")
-                )
-                _rotate_key()   # rotate on any error
-                if attempt < retries - 1:
-                    time.sleep(wait)
-
-    raise RuntimeError(f"Gemini call failed after {retries} attempts: {last_error}")
+    raise RuntimeError(f"Groq call failed after {retries} attempts: {last_error}")
 
 
 def call_gemini_json(
@@ -283,11 +128,11 @@ def call_gemini_json(
     model: str | None = None,
     max_tokens: int = 2048,
 ) -> Any:
-    """Call Gemini and return parsed JSON (dict or list)."""
+    """Call Groq and return parsed JSON (dict or list). Signature unchanged."""
     raw = call_gemini(
         prompt=prompt,
         system=system,
-        model=model or _CHAT_MODEL,
+        model=model or _GROQ_MODEL,
         max_tokens=max_tokens,
         temperature=0.1,
         json_mode=True,
@@ -297,7 +142,7 @@ def call_gemini_json(
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
         logger.error(f"JSON parse failed. Raw response:\n{raw[:500]}")
-        raise ValueError(f"Gemini returned invalid JSON: {e}") from e
+        raise ValueError(f"Groq returned invalid JSON: {e}") from e
 
 
 # ── Classification ────────────────────────────────────────────────────────────
@@ -305,7 +150,7 @@ def call_gemini_json(
 def classify_query(query: str) -> str:
     """
     Classify query → proxy | genealogy | pattern | leverage | intent | general
-    Falls back to keyword matching if LLM returns None or fails.
+    Falls back to keyword matching on LLM failure.
     """
     valid = {"proxy", "genealogy", "pattern", "leverage", "intent", "general"}
     prompt = (
@@ -326,10 +171,9 @@ def classify_query(query: str) -> str:
             for word in re.sub(r"[^a-z|]", " ", raw.lower()).split():
                 if word in valid:
                     return word
-        logger.debug(f"classify_query: no valid category in {raw!r}, using keyword fallback")
         return _keyword_classify(query)
-    except Exception as e:
-        logger.warning(f"Gemini classification failed, using keyword fallback: {e}")
+    except Exception as exc:
+        logger.warning(f"Groq classification failed, using keyword fallback: {exc}")
         return _keyword_classify(query)
 
 
@@ -362,7 +206,7 @@ def extract_relations(text: str, entity_names: list[str]) -> list[dict]:
         f'  "subject"    : actor name\n'
         f'  "relation"   : one of {relation_types}\n'
         f'  "object"     : actor name\n'
-        f'  "confidence" : float 0.0–1.0\n'
+        f'  "confidence" : float 0.0-1.0\n'
         f'  "evidence"   : brief quote from the text\n\n'
         f"Return ONLY the JSON array — no markdown, no explanation."
     )
@@ -373,8 +217,8 @@ def extract_relations(text: str, entity_names: list[str]) -> list[dict]:
         if isinstance(result, dict) and "relations" in result:
             return result["relations"]
         return []
-    except Exception as e:
-        logger.warning(f"Relation extraction failed: {e}")
+    except Exception as exc:
+        logger.warning(f"Relation extraction failed: {exc}")
         return []
 
 
@@ -384,7 +228,7 @@ def generate_report(system_prompt: str, context: str) -> str:
     return call_gemini(
         prompt=context,
         system=system_prompt,
-        model=_CHAT_MODEL,
+        model=_GROQ_MODEL,
         max_tokens=4096,
         temperature=0.3,
     )
@@ -394,56 +238,39 @@ def extract_relations_from_report(report_text: str) -> list[dict]:
     return extract_relations(report_text, [])
 
 
-# ── Embeddings ────────────────────────────────────────────────────────────────
+# ── Embeddings (sentence-transformers) ────────────────────────────────────────
 
 def embed_text(text: str) -> list[float]:
-    """Generate a dense embedding using the best available Gemini embedding model."""
-    from google.genai import types
-    client = _get_client()
-    model = _resolve_embed_model()
+    """Generate a dense embedding using sentence-transformers (384-dim)."""
     try:
-        result = client.models.embed_content(
-            model=model,
-            contents=text[:8192],
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-        )
-        if result.embeddings:
-            return list(result.embeddings[0].values)
-        return []
-    except Exception as e:
-        logger.error(f"embed_text failed (model={model}): {e}")
+        model = _get_st_model()
+        vec = model.encode(text[:8192], normalize_embeddings=True)
+        return vec.tolist()
+    except Exception as exc:
+        logger.error(f"embed_text failed: {exc}")
         return []
 
 
 def embed_query(query: str) -> list[float]:
-    """Generate a query embedding (RETRIEVAL_QUERY task for better recall)."""
-    from google.genai import types
-    client = _get_client()
-    model = _resolve_embed_model()
+    """Generate a query embedding (same model — symmetric retrieval)."""
+    return embed_text(query[:2048])
+
+
+def embed_batch(texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    """Embed a list of texts efficiently using batched inference."""
     try:
-        result = client.models.embed_content(
-            model=model,
-            contents=query[:2048],
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+        model = _get_st_model()
+        vecs = model.encode(
+            [t[:8192] for t in texts],
+            batch_size=batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
-        if result.embeddings:
-            return list(result.embeddings[0].values)
-        return []
-    except Exception as e:
-        logger.error(f"embed_query failed (model={model}): {e}")
-        return []
-
-
-def embed_batch(texts: list[str], batch_size: int = 20) -> list[list[float]]:
-    """Embed a list of texts with rate-limit-friendly batching."""
-    all_embeddings: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        for text in texts[i: i + batch_size]:
-            all_embeddings.append(embed_text(text))
-            time.sleep(0.05)
-        if i + batch_size < len(texts):
-            time.sleep(0.5)
-    return all_embeddings
+        return [v.tolist() for v in vecs]
+    except Exception as exc:
+        logger.error(f"embed_batch failed: {exc}")
+        # Fallback: embed one by one
+        return [embed_text(t) for t in texts]
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -451,22 +278,13 @@ def embed_batch(texts: list[str], batch_size: int = 20) -> list[list[float]]:
 def test_connection() -> bool:
     try:
         reply = call_gemini("Reply with exactly: OK", max_tokens=20)
-        logger.info(f"Gemini OK: {reply!r}")
+        logger.info(f"Groq OK: {reply!r}")
         return True
-    except Exception as e:
-        logger.error(f"Gemini test failed: {e}")
+    except Exception as exc:
+        logger.error(f"Groq test failed: {exc}")
         return False
-
-
-def list_available_models() -> list[str]:
-    """List all models available to your API key."""
-    try:
-        return [m.name for m in _get_client().models.list()]
-    except Exception as e:
-        logger.error(f"list_available_models failed: {e}")
-        return []
 
 
 def current_key_info() -> str:
     """Return a safe representation of the active key (last 4 chars only)."""
-    return f"...{_current_key[-4:]}"
+    return f"...{_GROQ_KEY[-4:]}" if _GROQ_KEY else "NOT SET"

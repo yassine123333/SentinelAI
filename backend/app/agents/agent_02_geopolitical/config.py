@@ -16,21 +16,17 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "yourpassword")
 WEAVIATE_URL = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 WEAVIATE_KEY = os.getenv("WEAVIATE_KEY", "")
 
-# ── LLM ──────────────────────────────────────────────────────
-GEMINI_API_KEY1     = os.getenv("GEMINI_API_KEY1", "")
-GEMINI_API_KEY2     = os.getenv("GEMINI_API_KEY2", "")
-GEMINI_API_KEY3     = os.getenv("GEMINI_API_KEY3", "")
-GEMINI_API_KEY4     = os.getenv("GEMINI_API_KEY4", "")
-GEMINI_API_KEY =[GEMINI_API_KEY1, GEMINI_API_KEY2, GEMINI_API_KEY3, GEMINI_API_KEY4]
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")  # optional fallback
+# ── LLM (Groq) ───────────────────────────────────────────────
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-# Primary reasoning model — Gemini 2.5 Flash (fast + capable)
-REASONING_MODEL    = os.getenv("REASONING_MODEL", "")
-# Fast routing model — same model, lower token budget
-ROUTING_MODEL      = os.getenv("ROUTING_MODEL", "")
-# Embedding model — Gemini native embeddings
-EMBEDDING_MODEL    = os.getenv("EMBEDDING_MODEL", "text-embedding-004")  # new SDK: no "models/" prefix
-EMBEDDING_DIM      = int(os.getenv("EMBEDDING_DIM", "3072"))  # gemini-embedding-001 = 3072 dims
+# Kept for compatibility with orchestration layer references
+REASONING_MODEL = os.getenv("REASONING_MODEL", GROQ_MODEL)
+ROUTING_MODEL   = os.getenv("ROUTING_MODEL",   GROQ_MODEL)
+
+# ── Embeddings (sentence-transformers, local) ─────────────────
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"   # local, no API key required
+EMBEDDING_DIM   = 384                   # all-MiniLM-L6-v2 output dimension
 
 # ── Data Sources ─────────────────────────────────────────────
 GDELT_API_URL  = os.getenv("GDELT_API_URL", "https://api.gdeltproject.org/api/v2")
