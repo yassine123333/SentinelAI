@@ -7,6 +7,13 @@ Endpoints:
   GET  /api/v1/admin/runs/{run_id}/state    — Raw state snapshot for debugging
   POST /api/v1/admin/runs/{run_id}/cancel   — Mark a stalled run as failed
 
+  SOC Security Dashboard:
+  GET  /api/v1/admin/soc/status             — Daemon status + blocked IP count
+  GET  /api/v1/admin/soc/blocked            — All permanently blocked IPs
+  GET  /api/v1/admin/soc/ip/{ip}            — Full state + history for one IP
+  GET  /api/v1/admin/soc/audit              — Recent audit log (last 100 events)
+  POST /api/v1/admin/soc/unblock/{ip}       — Manually unblock an IP
+
 Security:
   - All routes require JWT with role=admin (enforced by require_admin dependency)
   - NoSQL injection prevention: all queries use Motor parameterised form
@@ -219,6 +226,165 @@ async def admin_cancel_run(
         "previous_status": current_status,
         "new_status": "failed",
         "cancelled_by": admin_user["user_id"],
+    }
+
+
+# ── SOC Security Dashboard Endpoints ─────────────────────────────────────────
+
+
+@router.get(
+    "/soc/status",
+    summary="[Admin] SOC daemon status",
+    description="Returns daemon configuration, blocked IP count, and live queue size.",
+)
+@limiter.limit("60/minute")
+async def soc_status(
+    request: Request,
+    admin_user: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    from app.security.daemon import get_daemon
+    from app.security.blocker import get_status as blocker_status
+    import asyncio
+
+    daemon = get_daemon()
+    blocked_count = await db.soc_blocked_ips.count_documents({})
+    monitored_count = await db.soc_ip_states.count_documents({"level": {"$gt": 0}})
+    audit_count = await db.soc_audit_log.count_documents({})
+
+    from app.security.collectors import _request_queue
+    return {
+        "daemon_running": daemon._running,
+        "poll_interval_seconds": daemon._running and 10,
+        "blocked_ips_total": blocked_count,
+        "monitored_ips_total": monitored_count,
+        "audit_events_total": audit_count,
+        "queue_size": _request_queue.qsize(),
+        "blocker": blocker_status(),
+    }
+
+
+@router.get(
+    "/soc/blocked",
+    summary="[Admin] List all permanently blocked IPs",
+    description="Returns all IPs in the hard-block list with reasons and timestamps.",
+)
+@limiter.limit("30/minute")
+async def soc_blocked_ips(
+    request: Request,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    admin_user: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    docs = (
+        await db.soc_blocked_ips.find({}, {"_id": 0})
+        .sort("blocked_at", -1)
+        .skip(skip)
+        .limit(limit)
+        .to_list(limit)
+    )
+    total = await db.soc_blocked_ips.count_documents({})
+    return {"total": total, "skip": skip, "limit": limit, "items": _serialize_run(docs)}
+
+
+@router.get(
+    "/soc/ip/{ip}",
+    summary="[Admin] Full SOC state for one IP",
+    description="Returns intervention level, violation history, and all audit events for a given IP.",
+)
+@limiter.limit("60/minute")
+async def soc_ip_detail(
+    request: Request,
+    ip: str,
+    admin_user: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    state = await db.soc_ip_states.find_one({"ip": ip}, {"_id": 0})
+    audit = (
+        await db.soc_audit_log.find({"ip": ip}, {"_id": 0})
+        .sort("ts", -1)
+        .limit(50)
+        .to_list(50)
+    )
+    level_names = {0: "CLEAN", 1: "MONITORING", 2: "CHALLENGED", 3: "SUSPENDED", 4: "BLOCKED"}
+    if state:
+        state["level_name"] = level_names.get(state.get("level", 0), "UNKNOWN")
+    return {
+        "ip": ip,
+        "state": _serialize_run(state) if state else None,
+        "audit_events": _serialize_run(audit),
+    }
+
+
+@router.get(
+    "/soc/audit",
+    summary="[Admin] Recent SOC audit log",
+    description=(
+        "Returns the most recent SOC audit events (Groq reasoning chains + actions). "
+        "Each entry includes the full findings, LLM decision, and action taken."
+    ),
+)
+@limiter.limit("30/minute")
+async def soc_audit_log(
+    request: Request,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    event_type: str | None = Query(default=None, description="Filter by event type, e.g. ESCALATION_BLOCKED"),
+    admin_user: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    query: dict = {}
+    if event_type:
+        query["event_type"] = event_type
+    docs = (
+        await db.soc_audit_log.find(query, {"_id": 0})
+        .sort("ts", -1)
+        .skip(skip)
+        .limit(limit)
+        .to_list(limit)
+    )
+    total = await db.soc_audit_log.count_documents(query)
+    return {"total": total, "skip": skip, "limit": limit, "items": _serialize_run(docs)}
+
+
+@router.post(
+    "/soc/unblock/{ip}",
+    summary="[Admin] Manually unblock an IP",
+    description=(
+        "Removes an IP from the permanent block list and resets its intervention state to CLEAN. "
+        "Does NOT remove Azure NSG or Nginx rules — those must be cleaned up manually."
+    ),
+)
+@limiter.limit("10/minute")
+async def soc_unblock_ip(
+    request: Request,
+    ip: str,
+    admin_user: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    from app.security.daemon import get_daemon
+
+    # Remove from MongoDB
+    await db.soc_blocked_ips.delete_one({"ip": ip})
+    await db.soc_ip_states.update_one(
+        {"ip": ip},
+        {"$set": {"level": 0, "suspended": False, "captcha_required": False}},
+    )
+
+    # Remove from in-memory sets
+    daemon = get_daemon()
+    daemon._hard_blocked.discard(ip)
+    from app.security.blocker import _blocked_ips
+    _blocked_ips.discard(ip)
+
+    logger.warning(
+        "soc_unblock admin_user_id=%s ip=%s", admin_user["user_id"], ip
+    )
+    return {
+        "unblocked": ip,
+        "note": "IP unblocked in MongoDB and memory. Remove NSG/Nginx rules manually if applied.",
+        "unblocked_by": admin_user["user_id"],
     }
 
 
