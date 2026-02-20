@@ -1,4 +1,27 @@
 services:
+  neo4j:
+    image: neo4j:5.15
+    container_name: sentinelai-neo4j
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt protocol
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-sentinelai2024}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_plugins:/plugins
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "-", "http://localhost:7474"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -7,6 +30,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # Neo4j — override localhost URI with Docker service name
+      - NEO4J_URI=bolt://neo4j:7687
       # SOC Security Daemon — container-safe defaults
       # Nginx and Azure NSG blocking disabled (no nginx sidecar in this compose)
       # The daemon still runs, detects threats, and logs to MongoDB (audit mode)
@@ -19,8 +44,14 @@ services:
       - SOC_UA_ROTATION_THRESH=3
       - SOC_ENABLE_MONGO_PROFILING=false
       - NGINX_LOG_PATH=/var/log/nginx/access.log
+    volumes:
+      # Persist Qdrant vector store (agent_03_sentiment uses local file-based Qdrant)
+      - qdrant_data:/app/app/agents/agent_03_sentiment/qdrant_data
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
+    depends_on:
+      neo4j:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -60,5 +91,9 @@ services:
       - production
 
 volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_plugins:
+  qdrant_data:
   caddy_data:
   caddy_config:
